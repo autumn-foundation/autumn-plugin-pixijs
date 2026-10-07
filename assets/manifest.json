@@ -1,0 +1,28 @@
+{
+  "files": {
+    "PIXI-LICENSE": {
+      "source": "https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/LICENSE",
+      "upstream_bytes": 1092,
+      "upstream_integrity": "sha384-DW05SCtkW0ljGN5QkX9yxuThaqbPVlFm5ibuTACn9yRGki4gBN5kdXpyb5L60g2t",
+      "upstream_path": "/LICENSE"
+    },
+    "pixi.min.js": {
+      "source": "https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.js",
+      "upstream_bytes": 840663,
+      "upstream_integrity": "sha384-sQhAUuZTvdanRcBHbVCTasnEWH28GGEK87FJGPj/JaqwL/15KWQwKe7whTHdCkwm",
+      "upstream_path": "/dist/pixi.min.js"
+    },
+    "unsafe-eval.min.js": {
+      "source": "https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/packages/unsafe-eval.min.js",
+      "upstream_bytes": 15751,
+      "upstream_integrity": "sha384-BM24TdVWfEguSNFpLGxxbyyXTUrbgHXZZWEciqcl2APKgUzLagtGe2wwuAzmsmsi",
+      "upstream_path": "/dist/packages/unsafe-eval.min.js"
+    }
+  },
+  "homepage": "https://pixijs.com",
+  "library": "pixi.js",
+  "license": "MIT",
+  "notes": "Upstream bytes are pinned by sha384 (upstream_integrity) and are not changed. pixi.min.js is the IIFE build (global PIXI). unsafe-eval.min.js patches the global PIXI so that PixiJS needs no eval. init.js, parse.js and pixi.css are plugin-authored; autumn-web computes their URLs and SRI. This file is provenance only and is not served.",
+  "pinned": "newest release as of 2026-10-07",
+  "version": "8.22.0"
+}
