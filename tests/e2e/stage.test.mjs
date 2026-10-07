@@ -1,9 +1,9 @@
 // Browser E2E tests: real Chromium, real WebGL (SwiftShader).
 // Run: cargo build --example e2e_fixture && npm run test:e2e
-import { after, before, describe, test } from "node:test";
+import { after, afterEach, before, describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { assertClean as clean, lineCoverage, pixel, read, sleep, start, until, waitState } from "./harness.mjs";
+import { assertClean as clean, lineCoverage, pixel, read, sleep, start, states, until, waitState } from "./harness.mjs";
 
 /** Minimum line coverage of init.js over this suite. */
 const MIN_INIT_COVERAGE = 95;
@@ -11,6 +11,10 @@ const MIN_INIT_COVERAGE = 95;
 let app;
 before(async () => {
   app = await start();
+});
+// Each test frees its pages, so stages with motion do not slow later tests.
+afterEach(async () => {
+  await app?.closePages();
 });
 after(async () => {
   await app?.close();
@@ -190,10 +194,13 @@ describe("kinds", () => {
       const get = (label) => h.root.getChildByLabel(label);
       const rect = get("rect");
       const bounds = rect.getLocalBounds();
+      const star3 = get("star3");
+      const b3 = star3.getLocalBounds();
       const text = get("text").style;
       return {
         rect: [rect.x, rect.y, Math.round(rect.angle), rect.scale.x, rect.scale.y, rect.alpha, rect.tint],
-        bounds: [bounds.x, bounds.y, bounds.width, bounds.height],
+        bounds: [bounds.x, bounds.y, bounds.width, bounds.height, rect.pivot.x, rect.pivot.y],
+        star3: [star3.pivot.x, star3.pivot.y, b3.x + b3.width / 2, b3.y + b3.height],
         sprite: [get("sprite").width, get("sprite").height, get("sprite").anchor.x, get("sprite").anchor.y],
         tiling: [get("tiling").width, get("tiling").height],
         text: [text.fontSize, text.fontFamily, text.fill, text.fontWeight, text.align, text.wordWrapWidth],
@@ -201,7 +208,8 @@ describe("kinds", () => {
       };
     });
     assert.deepEqual(info.rect, [50, 60, 90, 2, 3, 0.5, 0xff0000]);
-    assert.deepEqual(info.bounds, [0, -50, 100, 50], "anchor 0,1 puts the rect above its position");
+    assert.deepEqual(info.bounds, [-50, -25, 100, 50, -50, 25], "anchor 0,1: the pivot is the bottom-left corner");
+    assert.deepEqual(info.star3.slice(0, 2), info.star3.slice(2), "anchor 0.5,1: the pivot is the bottom center of the bounds");
     assert.deepEqual(info.sprite, [20, 10, 1, 0]);
     assert.deepEqual(info.tiling, [400, 200], "a bad size uses the stage size");
     assert.deepEqual(info.text, [30, "monospace", 0x123456, "bold", "center", 120]);
@@ -222,6 +230,15 @@ describe("motion", () => {
       };
     });
 
+  /** Counts the frame changes of the /motion sprite sheet in `window.__frames`. */
+  const countFrames = (page) =>
+    page.evaluate(() => {
+      window.__frames = 0;
+      document.getElementById("stage").autumnPixi.root.getChildByLabel("sheet").onFrameChange = () => {
+        window.__frames += 1;
+      };
+    });
+
   test("spin, scroll, and animations run", async () => {
     const page = await app.open("/motion");
     await waitState(page, "stage", "ready");
@@ -231,13 +248,16 @@ describe("motion", () => {
     const later = await motion(page);
     assert.ok(later.rotation > start.rotation, `spin: ${start.rotation} → ${later.rotation}`);
     assert.ok(later.tile[0] > start.tile[0] && later.tile[1] < start.tile[1], `scroll: ${start.tile} → ${later.tile}`);
-    assert.notEqual(await read(page, "stage", (h) => h.root.getChildByLabel("sheet").playing), false);
+    assert.equal(await read(page, "stage", (h) => h.root.getChildByLabel("sheet").animationSpeed), 0.5, "30 fps");
+    await countFrames(page);
+    await page.waitForFunction(() => window.__frames > 2);
     await assertClean(page);
   });
 
   test("reduced motion stops automatic motion", async () => {
     const page = await app.open("/motion", { reducedMotion: "reduce" });
     await waitState(page, "stage", "ready");
+    await countFrames(page);
     const start = await motion(page);
     await sleep(300);
     const later = await motion(page);
@@ -245,6 +265,7 @@ describe("motion", () => {
     assert.equal(later.rotation, start.rotation);
     assert.deepEqual(later.tile, start.tile);
     assert.equal(later.frame, start.frame);
+    assert.equal(await page.evaluate(() => window.__frames), 0, "the sheet does not animate");
   });
 
   test("a stage can opt back into motion", async () => {
@@ -309,6 +330,31 @@ describe("motion", () => {
     });
     await sleep(200);
     assert.equal(await page.evaluate(() => window.__renders), 1);
+    await page.evaluate(() => document.getElementById("stage").autumnPixi.requestRender());
+    await sleep(200);
+    assert.equal(await page.evaluate(() => window.__renders), 2, "a later frame renders again");
+  });
+
+  test("the handle of a freed stage is safe to call", async () => {
+    const page = await app.open("/motion");
+    await waitState(page, "stage", "ready");
+    await until(page, "stage", (h) => h.looping);
+    await page.evaluate(() => {
+      window.__handle = document.getElementById("stage").autumnPixi;
+      window.__el = document.getElementById("stage");
+      window.__el.remove();
+    });
+    await page.waitForFunction(() => window.__el.getAttribute("data-pixi-state") === "disposed");
+    const looping = await page.evaluate(() => {
+      const h = window.__handle;
+      h.update();
+      h.requestRender();
+      h.render();
+      return h.looping;
+    });
+    assert.equal(looping, false);
+    await sleep(100);
+    await assertClean(page);
   });
 });
 
@@ -326,20 +372,45 @@ describe("tap", () => {
       return [button.eventMode, button.cursor, button.accessible, button.accessibleHint];
     });
     assert.deepEqual(info, ["static", "pointer", true, "Press me"]);
+    assert.equal(await page.locator("#stage").getAttribute("role"), "group", "screen readers keep the buttons");
     await assertClean(page);
+  });
+
+  test("keyboard users can tap with the Canvas 2D renderer", async () => {
+    const page = await app.open("/tap-canvas");
+    await waitState(page, "stage", "ready");
+    assert.equal(await read(page, "stage", (h) => h.app.renderer.name), "canvas");
+    await page.keyboard.press("Tab");
+    const button = page.locator('button[aria-label="Press me"]');
+    await button.waitFor({ state: "attached" });
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => window.__taps.length === 1);
+    assert.deepEqual(await page.evaluate(() => window.__taps), [{ target: "button", id: "button", x: 400, y: 225 }]);
+    await assertClean(page);
+  });
+
+  test("touch scrolling works over stages", async () => {
+    const touch = (page) => page.evaluate(() => getComputedStyle(document.querySelector("#stage > canvas")).touchAction);
+    const plain = await app.open("/basic");
+    await waitState(plain, "stage", "ready");
+    assert.equal(await touch(plain), "auto", "no tappable objects: the page scrolls");
+    const tap = await app.open("/tap");
+    await waitState(tap, "stage", "ready");
+    assert.equal(await touch(tap), "manipulation", "tappable objects: pan and zoom still work");
   });
 
   test("a tappable object without a request only sends pixi:tap", async () => {
     const page = await app.open("/tap");
     await waitState(page, "stage", "ready");
+    await page.waitForLoadState("load"); // htmx must be able to send a request.
     const box = await page.locator("#stage > canvas").boundingBox();
     const scale = box.width / 800;
     await page.mouse.click(box.x + 60 * scale, box.y + 60 * scale);
     await page.mouse.click(box.x + 780 * scale, box.y + 430 * scale); // Empty corner.
     await sleep(200);
     const taps = await page.evaluate(() => window.__taps);
-    assert.equal(taps.length, 1);
-    assert.equal(taps[0].id, "plain");
+    assert.deepEqual(taps, [{ target: "plain", id: "plain", x: 60, y: 60 }], "logical stage coordinates");
     assert.equal(await page.locator("#log").textContent(), "none");
   });
 
@@ -351,6 +422,13 @@ describe("tap", () => {
     const button = page.locator('button[aria-label="Press me"]');
     await button.waitFor({ state: "attached" });
     assert.equal(await page.locator('button[aria-label="plain"]').count(), 1, "the id names an unlabeled object");
+    // The button covers its object, also when the stage is not at the page top.
+    const [buttonBox, canvasBox] = [await button.boundingBox(), await page.locator("#stage > canvas").boundingBox()];
+    const center = (b) => [b.x + b.width / 2, b.y + b.height / 2];
+    const [bx, by] = center(buttonBox);
+    const [cx, cy] = center(canvasBox);
+    assert.ok(Math.abs(bx - cx) < 2 && Math.abs(by - cy) < 2, `button ${[bx, by]} over object ${[cx, cy]}`);
+    assert.equal(await page.locator("#stage > [data-pixi-a11y]").count(), 1, "the runtime tags the layer");
     await button.focus();
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => document.getElementById("log").textContent === "tapped 1");
@@ -538,9 +616,39 @@ describe("lifecycle", () => {
       document.body.appendChild(document.createElement("div"));
       document.body.appendChild(document.createTextNode("text"));
     });
-    await sleep(200);
+    await page.evaluate(() => 0); // One more task: observer callbacks have run.
+    assert.deepEqual(await states(page, "stage"), ["loading", "ready"]);
     assert.equal(await page.locator("#stage > canvas").count(), 1);
-    assert.equal((await events(page)).length, 1);
+  });
+
+  test("a stage and its declarations inserted in one task build once", async () => {
+    const page = await app.open("/basic");
+    await waitState(page, "stage", "ready");
+    await page.evaluate(() => {
+      const stage = document.createElement("div");
+      stage.id = "late";
+      stage.setAttribute("data-pixi", "stage");
+      document.body.append(stage);
+      stage.insertAdjacentHTML("beforeend", '<div hidden data-pixi-shape="circle"></div>');
+    });
+    await waitState(page, "late", "ready");
+    await sleep(100);
+    assert.deepEqual(await states(page, "late"), ["loading", "ready"]);
+    assert.equal(await read(page, "late", (h) => h.objects.length), 1);
+  });
+
+  test("the data-pixi attribute starts and stops a stage", async () => {
+    const page = await app.open("/basic");
+    await waitState(page, "stage", "ready");
+    await page.evaluate(() => {
+      const el = document.getElementById("stage");
+      window.__gl = el.autumnPixi.app.renderer.gl;
+      el.removeAttribute("data-pixi");
+    });
+    await waitState(page, "stage", "disposed");
+    assert.equal(await page.evaluate(() => window.__gl.isContextLost()), true, "no leaked context");
+    await page.evaluate(() => document.getElementById("stage").setAttribute("data-pixi", "stage"));
+    await waitState(page, "stage", "ready");
   });
 
   test("init.js added after page load still scans the page", async () => {
@@ -567,6 +675,62 @@ describe("lifecycle", () => {
     assert.equal(await page.locator("#restored > canvas").count(), 1);
     const [r] = await pixel(page, "restored");
     assert.ok(r > 200, "the restored stage renders");
+  });
+
+  test("restored markup drops a stale accessibility layer", async () => {
+    const page = await app.open("/tap");
+    await waitState(page, "stage", "ready");
+    await page.keyboard.press("Tab");
+    await page.locator("#stage > [data-pixi-a11y]").waitFor({ state: "attached" });
+    await page.evaluate(() => {
+      const html = document.getElementById("stage").outerHTML.replace('id="stage"', 'id="restored"');
+      document.body.insertAdjacentHTML("beforeend", html);
+    });
+    await waitState(page, "restored", "ready");
+    assert.equal(await page.locator("#restored > [data-pixi-a11y]").count(), 0);
+  });
+
+  test("htmx settle keeps the stage aspect ratio", async () => {
+    const page = await app.open("/square-swap");
+    await waitState(page, "sq", "ready");
+    await page.waitForLoadState("load");
+    await page.evaluate(() => (window.__old = document.getElementById("sq")));
+    await page.click("#next");
+    await page.waitForFunction(() => {
+      const el = document.getElementById("sq");
+      return el !== window.__old && el.getAttribute("data-pixi-state") === "ready";
+    });
+    await sleep(300); // htmx settles after 20 ms.
+    const box = await page.locator("#sq").boundingBox();
+    assert.ok(Math.abs(box.width - box.height) <= 1, `square after settle: ${JSON.stringify(box)}`);
+  });
+
+  test("a parked stage builds again when it comes back or changes", async () => {
+    // A declaration change builds a failed stage again.
+    const page = await app.open("/sprite-missing");
+    await waitState(page, "stage", "error");
+    page.errors.length = 0; // The 404 logs an error. This is correct.
+    await page.evaluate(() =>
+      document.querySelector("[data-pixi-sprite]").setAttribute("data-pixi-sprite", "/static/img/red.png"),
+    );
+    await waitState(page, "stage", "ready");
+    // A failed stage builds again when it leaves the document and comes back.
+    const back = await app.open("/sprite-missing");
+    await waitState(back, "stage", "error");
+    back.errors.length = 0;
+    await back.evaluate(() => {
+      window.__el = document.getElementById("stage");
+      window.__el.remove();
+      window.__el.querySelector("[data-pixi-sprite]").setAttribute("data-pixi-sprite", "/static/img/red.png");
+    });
+    await back.evaluate(() => document.body.append(window.__el));
+    await waitState(back, "stage", "ready");
+    // A stage that htmx parked builds again when it comes back.
+    await back.evaluate(() => window.__el.dispatchEvent(new CustomEvent("htmx:beforeCleanupElement", { bubbles: true })));
+    await waitState(back, "stage", "disposed");
+    await back.evaluate(() => window.__el.remove());
+    await back.evaluate(() => document.body.append(window.__el));
+    await waitState(back, "stage", "ready");
   });
 
   test("htmx cleanup frees a stage and parks it", async () => {
@@ -615,23 +779,25 @@ describe("changes", () => {
     await page.evaluate(() => document.getElementById("stage").setAttribute("data-pixi-size", "400,400"));
     await page.waitForFunction(() => window.__events.length === 5);
     assert.deepEqual(await read(page, "stage", (h) => h.size), [400, 400]);
-    // Of these changes, only the new text of #score rebuilds the stage.
-    await page.evaluate(() => {
-      const el = document.getElementById("stage");
-      el.setAttribute("class", "x");
-      el.insertAdjacentHTML("beforeend", "<p>note</p>");
-      el.lastElementChild.textContent = "changed";
-      document.getElementById("score").setAttribute("title", "x");
-      el.setAttribute("data-pixi-label", "not a stage attribute");
-      document.getElementById("score").innerHTML = "Score: 20<span>!</span>";
-    });
+    await waitState(page, "stage", "ready");
+    // Each of these changes runs in its own task. None of them builds the stage.
+    await page.evaluate(() => document.getElementById("score").insertAdjacentHTML("beforeend", "<span>!</span>"));
     await page.waitForFunction(() => window.__events.length === 6);
-    // An attribute inside a declaration does not rebuild the stage.
-    await page.evaluate(() => {
-      document.querySelector("#score span").setAttribute("data-pixi-fill", "#00ff00");
-    });
-    await sleep(200);
-    assert.equal(await count(), 6, "only the text change rebuilds");
+    await waitState(page, "stage", "ready");
+    const before = (await states(page, "stage")).length;
+    for (const change of [
+      () => document.getElementById("stage").setAttribute("class", "x"),
+      () => document.getElementById("stage").insertAdjacentHTML("beforeend", "<p>note</p>"),
+      () => (document.querySelector("#stage > p").textContent = "changed"),
+      () => document.getElementById("score").setAttribute("title", "x"),
+      () => document.getElementById("stage").setAttribute("data-pixi-label", "not a stage attribute"),
+      () => document.querySelector("#score span").setAttribute("data-pixi-fill", "#00ff00"),
+    ]) {
+      await page.evaluate(change);
+      await page.evaluate(() => 0);
+      assert.equal((await states(page, "stage")).length, before, `no build after ${change}`);
+    }
+    assert.equal(await count(), 6);
   });
 
   test("a failed stage stays failed when other content swaps in", async () => {
@@ -659,6 +825,14 @@ describe("changes", () => {
     assert.deepEqual(await eventTypes(page), ["pixi:ready", "pixi:error"]);
   });
 
+  test("removing a kind attribute rebuilds the stage", async () => {
+    const page = await app.open("/kinds");
+    await waitState(page, "stage", "ready");
+    await page.evaluate(() => document.getElementById("rect").removeAttribute("data-pixi-shape"));
+    await page.waitForFunction(() => window.__events.length === 2);
+    assert.equal(await read(page, "stage", (h) => h.objects.length), 11);
+  });
+
   test("a removed canvas rebuilds the stage", async () => {
     const page = await app.open("/basic");
     await waitState(page, "stage", "ready");
@@ -683,15 +857,22 @@ describe("removal during a build", () => {
     });
     await insert(page, '<div id="late" data-pixi="stage"><div hidden data-pixi-sprite="/static/img/checker.png"></div></div>');
     await inFlight;
+    // The renderer is up and the image is still in flight.
+    await page.locator("#late > canvas").waitFor({ state: "attached" });
     await page.evaluate(() => {
       window.__late = document.getElementById("late");
       window.__late.remove();
     });
+    const finished = page.waitForEvent("requestfinished", (r) => r.url().endsWith("/checker.png"));
     release();
-    await page.waitForFunction(() => window.__late.getAttribute("data-pixi-state") === "disposed");
-    await sleep(300);
-    assert.equal(await page.evaluate(() => window.__late.autumnPixi), undefined);
-    assert.equal(await page.locator("canvas").count(), 1, "only the first stage has a canvas");
+    await finished;
+    await sleep(200); // The load promise resolves after the response.
+    const after = await page.evaluate(() => ({
+      state: window.__late.getAttribute("data-pixi-state"),
+      handle: window.__late.autumnPixi,
+      canvas: window.__late.querySelector("canvas"),
+    }));
+    assert.deepEqual(after, { state: "disposed", handle: undefined, canvas: null });
     await assertClean(page);
   });
 
@@ -707,8 +888,11 @@ describe("removal during a build", () => {
               v.__slowInit = true;
               const init = v.Application.prototype.init;
               v.Application.prototype.init = async function (...args) {
+                window.__initStarted = true;
                 await new Promise((r) => setTimeout(r, 300));
-                return init.apply(this, args);
+                const result = await init.apply(this, args);
+                window.__initDone = true;
+                return result;
               };
             }
             value = v;
@@ -716,14 +900,88 @@ describe("removal during a build", () => {
         });
       },
     });
+    await page.waitForFunction(() => window.__initStarted === true);
+    assert.equal(await page.locator("#stage").getAttribute("data-pixi-state"), "loading");
     await page.evaluate(() => {
       window.__el = document.getElementById("stage");
       window.__el.remove();
     });
-    await sleep(600);
+    await page.waitForFunction(() => window.__initDone === true);
+    await sleep(100);
     assert.equal(await page.evaluate(() => window.__el.getAttribute("data-pixi-state")), "disposed");
+    assert.equal(await page.evaluate(() => window.__el.querySelector("canvas")), null);
     assert.equal(await page.locator("canvas").count(), 0);
     assert.deepEqual(await events(page), []);
     await assertClean(page);
+  });
+});
+
+describe("robustness", () => {
+  test("a device pixel ratio change updates the resolution", async () => {
+    const page = await app.open("/basic");
+    await waitState(page, "stage", "ready");
+    assert.equal(await read(page, "stage", (h) => h.app.renderer.resolution), 1);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 800, height: 600, deviceScaleFactor: 1.5, mobile: false });
+    await until(page, "stage", (h) => h.app.renderer.resolution === 1.5);
+  });
+
+  test("auto falls back to Canvas 2D when the WebGL renderer fails to start", async () => {
+    const page = await app.open("/basic", {
+      init: () => {
+        // The support check gets a context. The renderer does not.
+        const original = HTMLCanvasElement.prototype.getContext;
+        let calls = 0;
+        HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
+          if (/webgl/.test(type) && ++calls > 1) return null;
+          return original.call(this, type, ...rest);
+        };
+      },
+    });
+    await waitState(page, "stage", "ready");
+    assert.equal(await read(page, "stage", (h) => h.app.renderer.name), "canvas");
+    const [r] = await pixel(page, "stage");
+    assert.ok(r > 200, "the canvas renderer draws");
+  });
+
+  test("page code can load textures before any stage builds", async () => {
+    const page = await app.open("/no-stage");
+    const result = await page.evaluate(async () => {
+      const texture = await window.PIXI.Assets.load("/static/img/red.png");
+      return [texture.width, window.PIXI.loadTextures.config.preferWorkers];
+    });
+    assert.deepEqual(result, [64, false]);
+    await assertClean(page);
+  });
+
+  test("a ParticleContainer from custom code needs no eval", async () => {
+    const page = await app.open("/still");
+    await waitState(page, "stage", "ready");
+    await page.evaluate(() => {
+      const { PIXI, root, render } = document.getElementById("stage").autumnPixi;
+      const particles = new PIXI.ParticleContainer();
+      for (let i = 0; i < 10; i += 1) particles.addParticle(new PIXI.Particle({ texture: PIXI.Texture.WHITE, x: i * 10, y: 20 }));
+      root.addChild(particles);
+      render();
+    });
+    await assertClean(page);
+  });
+
+  test("large text gets a smaller texture resolution", async () => {
+    const page = await app.open("/big-text");
+    await waitState(page, "stage", "ready");
+    const pixels = await read(page, "stage", (h) => {
+      const text = h.root.getChildByLabel("text");
+      const b = text.getLocalBounds();
+      return b.width * b.height * text.resolution * text.resolution;
+    });
+    assert.ok(pixels <= 4096 * 4096 + 1, `text texture pixels: ${pixels}`);
+  });
+
+  test("an extreme stage size clamps the element aspect ratio", async () => {
+    const page = await app.open("/tall");
+    await waitState(page, "stage", "ready");
+    const box = await page.locator("#stage").boundingBox();
+    assert.ok(Math.abs(box.height / box.width - 10) < 0.1, `aspect clamps to 1/10: ${JSON.stringify(box)}`);
   });
 });

@@ -14,6 +14,7 @@ export const ATTR = Object.freeze({
   fallback: "data-pixi-fallback",
   state: "data-pixi-state",
   canvas: "data-pixi-canvas",
+  a11y: "data-pixi-a11y",
   sprite: "data-pixi-sprite",
   tiling: "data-pixi-tiling",
   sheet: "data-pixi-sheet",
@@ -47,6 +48,7 @@ export const STAGE = "stage";
 
 /** Limits that keep bad markup from stopping the page. */
 export const LIMITS = Object.freeze({
+  aspect: Object.freeze([0.1, 10]),
   maxSide: 8192,
   maxPolygonPoints: 512,
   starPoints: Object.freeze([3, 100]),

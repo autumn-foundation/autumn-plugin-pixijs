@@ -51,6 +51,9 @@ flowchart LR
   `pixi_script()`.
 - The page has one global name: `PIXI`.
 - User ES modules cannot `import ... from "pixi.js"`. They use the global.
+- `parse.js` gets SRI only from `<link rel="modulepreload">`. Browsers
+  without it (Safari before 17, Firefox before 115) import `parse.js` with
+  no SRI check. The bytes are same-origin bytes from the binary.
 - During a rolling deploy, a page from version N can get the plain URL of
   `parse.js` from version N+1. The SRI check then fails, and the stages
   show their fallback until the page reloads.

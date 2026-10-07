@@ -360,7 +360,7 @@ test("readStage tolerates a missing children list", () => {
 test("every attribute name is unique and uses the plugin prefix", () => {
   const names = Object.values(ATTR);
   assert.equal(new Set(names).size, names.length);
-  for (const name of names) assert.match(name, /^data-pixi(-[a-z]+)*$/);
+  for (const name of names) assert.match(name, /^data-pixi(-[a-z0-9]+)*$/);
 });
 
 test("exported tables are frozen", () => {

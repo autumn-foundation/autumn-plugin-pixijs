@@ -31,7 +31,7 @@ async function waitForHttp(url, child, timeoutMs = 30_000) {
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`fixture exited with ${child.exitCode}`);
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
       if (response.ok) return;
     } catch {
       // Not up yet.
@@ -92,9 +92,15 @@ export function lineCoverage(name) {
   return { percent: (100 * (code - uncovered.length)) / code, uncovered };
 }
 
-/** Records events, CSP violations, and errors in every page. */
+/** Records events, state changes, CSP violations, and errors in every page. */
 const RECORDER = () => {
   window.__events = [];
+  // Each `data-pixi-state` change, as `[id, state]`. The runtime sets the
+  // state synchronously, so a wrong build shows here at once.
+  window.__states = [];
+  new MutationObserver((records) => {
+    for (const r of records) window.__states.push([r.target.id, r.target.getAttribute("data-pixi-state")]);
+  }).observe(document, { subtree: true, attributes: true, attributeFilter: ["data-pixi-state"] });
   window.__csp = [];
   window.__warnings = [];
   window.__details = [];
@@ -154,8 +160,9 @@ export async function start({ env = {}, toml = null, example = "e2e_fixture", re
     child.kill();
     throw new Error(`${error.message}\n${stderr}`);
   }
-  const contexts = [];
-  const pages = [];
+  // Contexts and pages of the running test. `closePages()` frees them.
+  let contexts = [];
+  let pages = [];
 
   /**
    * Opens `path` in a fresh context. Options: Playwright context options,
@@ -179,16 +186,26 @@ export async function start({ env = {}, toml = null, example = "e2e_fixture", re
     return page;
   }
 
-  async function close() {
+  /** Merges the coverage of the open pages and closes their contexts. */
+  async function closePages() {
     for (const page of pages) {
       if (!page.isClosed()) addCoverage(await page.coverage.stopJSCoverage().catch(() => []));
     }
     for (const context of contexts) await context.close().catch(() => {});
-    await browser.close();
-    child.kill();
+    contexts = [];
+    pages = [];
   }
 
-  return { base, open, close };
+  async function close() {
+    try {
+      await closePages();
+      await browser.close();
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }
+
+  return { base, open, closePages, close };
 }
 
 /** Waits until `#id` has `data-pixi-state` equal to `state`. */
@@ -222,6 +239,11 @@ export async function pixel(page, id, fx = 0.5, fy = 0.5) {
     },
     [id, fx, fy],
   );
+}
+
+/** The `data-pixi-state` changes of `#id`, in order. */
+export function states(page, id) {
+  return page.evaluate((id) => window.__states.filter(([el]) => el === id).map(([, state]) => state), id);
 }
 
 /** Waits `ms` milliseconds. */

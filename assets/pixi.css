@@ -19,6 +19,13 @@
   height: 100%;
 }
 
+/* PixiJS moves its accessibility layer by the canvas position in the
+   viewport. The layer is inside the stage, and the canvas fills the stage,
+   so no move is necessary. */
+[data-pixi="stage"] > [data-pixi-a11y] {
+  transform: none !important;
+}
+
 /* Declarations are data, not content. */
 [data-pixi-sprite],
 [data-pixi-tiling],

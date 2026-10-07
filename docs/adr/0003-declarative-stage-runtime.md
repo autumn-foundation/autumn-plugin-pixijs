@@ -23,8 +23,11 @@ screen.
   `data-pixi-shape`). Later declarations draw on top. Text is the element
   content, so an htmx swap can change it.
 - Coordinates use a logical stage size (default `800 × 450`). The runtime
-  sets the element aspect ratio to this size and scales one root container
-  to the element. Objects center on their position by default.
+  sets the element aspect ratio to this size (clamped to `1/10`–`10`) and
+  scales one root container to fit the element. Objects center on their
+  position by default. A shape anchor sets its pivot within its bounds.
+- htmx settle puts back the old `style` of an element with the same id.
+  The runtime sets the aspect ratio again on `htmx:afterSettle`.
 - `parse.js` is pure and never throws. Node tests cover it. `init.js` turns
   the config into PixiJS objects.
 - `init.js` scans on `DOMContentLoaded`, on `htmx:afterSwap`, and on DOM
@@ -32,7 +35,9 @@ screen.
   second build.
 - The runtime builds a stage again when a declaration is added or removed,
   when a watched attribute or the text of a declaration changes, when a
-  stage attribute changes, or when its canvas is removed.
+  stage attribute changes, or when its canvas is removed. A stage that the
+  same mutation batch built does not build again. The `data-pixi`
+  attribute starts or stops a stage.
 - A stage that failed stays failed (a `WeakSet` parks it). It builds again
   only when it leaves the document and comes back, or when its
   declarations change.
@@ -42,11 +47,20 @@ screen.
   accessibility layer (a focusable button with the label). A tap sends a
   bubbling `pixi:tap` event from the declaration element. Thus an htmx
   attribute on the declaration (`hx-trigger="pixi:tap"`) sends a request.
+- PixiJS puts its accessibility layer inside the stage and moves it by the
+  canvas position in the viewport. The runtime tags the layer
+  (`data-pixi-a11y`), and `pixi.css` removes the move. A labeled stage
+  with tappable objects is `role="group"`, so screen readers keep the
+  buttons. PixiJS gives the layer to WebGL and WebGPU only. The runtime
+  also registers it for Canvas 2D.
+- PixiJS sets `touch-action: none` on its canvas. The runtime sets `auto`,
+  or `manipulation` for a stage with tappable objects, so that the page
+  scrolls.
 - The ticker runs only while the stage is visible, has motion, and motion
   is allowed. Otherwise frames render on demand. `AnimatedSprite` does not
   use the shared ticker.
-- Renderer: WebGL, then Canvas 2D (`auto`). `canvas` uses no WebGL
-  context.
+- Renderer: WebGL, then Canvas 2D (`auto`). When the WebGL renderer fails
+  to start, `auto` tries Canvas 2D. `canvas` uses no WebGL context.
 
 ```mermaid
 sequenceDiagram
@@ -73,12 +87,14 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> loading: scan (load, htmx swap, DOM insert)
     loading --> ready: built
-    loading --> error: no renderer, or an image failed
+    loading --> error: no renderer, an image failed, or the context was lost
+    loading --> disposed: element removed, or htmx cleanup
     ready --> error: WebGL context lost
-    ready --> disposed: element removed
-    ready --> loading: declarations changed
+    ready --> disposed: element removed, or htmx cleanup
+    ready --> loading: declarations, stage attributes, or canvas changed
     error --> loading: element inserted again, or declarations changed
-    disposed --> loading: element inserted again
+    error --> disposed: element removed
+    disposed --> loading: element inserted again, or declarations changed
 ```
 
 ## Consequences

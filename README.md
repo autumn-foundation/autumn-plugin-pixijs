@@ -22,15 +22,18 @@ autumn_web::app()
     .await;
 ```
 
-Put the tags in the layout `<head>`. Put them before your own scripts:
+Put the tags in the layout `<head>`. Put them before your own scripts.
+Tap requests need htmx:
 
 ```rust
 use autumn_plugin_pixijs::{pixi_script, pixi_stylesheet};
+use autumn_web::assets::asset_url;
 
 html! {
     head {
         (pixi_stylesheet())
         (pixi_script())
+        script src=(asset_url("js/htmx.min.js")) defer {}
     }
 }
 ```
@@ -52,24 +55,33 @@ html! {
 ## Coordinates
 
 A stage has a logical size. The default is `800 × 450`. Set it with
-`Stage::size(width, height)`. The runtime sets the element aspect ratio to
-this size and scales the stage to the element width. Positions and sizes
-use logical pixels at all screen sizes.
+`Stage::size(width, height)`. Positions and sizes use logical pixels at all
+screen sizes.
+
+The runtime sets the element aspect ratio to the logical size (clamped to
+`1/10`–`10`). It fits the stage in the element and centers it. Before
+JavaScript runs, the element has the default ratio `16 / 9`. For another
+size, set `aspect-ratio` in your own CSS (`Stage::class`). This stops a
+layout shift.
 
 An object centers on its position. The default position is the stage
-center. `anchor([0.0, 0.0])` puts the top-left corner at the position.
+center. `anchor([0.0, 0.0])` puts the top-left corner of the object at the
+position. For a shape, the anchor uses the shape bounds, stroke included. A
+polygon is different: its corners are relative to the position.
 
 ## Objects
 
 | Builder | Declaration | Object |
 |---|---|---|
-| `Sprite::new(url)` | `data-pixi-sprite` | An image (PNG, JPEG, WebP, AVIF, GIF, SVG). |
+| `Sprite::new(url)` | `data-pixi-sprite` | An image: `.png`, `.jpg`, `.jpeg`, `.webp`, `.avif`, or `.svg`. |
 | `TilingSprite::new(url, w, h)` | `data-pixi-tiling` | A repeated image. `scroll(x, y)` moves it. |
-| `AnimatedSprite::new(url)` | `data-pixi-sheet` | A frame animation from a PixiJS sprite sheet (`.json`). |
+| `AnimatedSprite::new(url)` | `data-pixi-sheet` | A frame animation from a PixiJS sprite sheet (`.json` with an `animations` table). |
 | `Text::new(text)` | `data-pixi-text` | Text. The text is the element content. |
 | `Shape::rect`, `rounded_rect`, `circle`, `ellipse`, `star`, `polygon` | `data-pixi-shape` | A vector shape with a fill and an optional stroke. |
 
-Later objects draw on top.
+Put each declaration as a direct child of the stage element. The runtime
+ignores other declarations. Later objects draw on top. A stage has at most
+1000 objects.
 
 ## Taps and htmx
 
@@ -79,7 +91,9 @@ declaration element. `detail` is `{ id, x, y, object }`. `x` and `y` are
 logical stage pixels.
 
 `tap_post(url)` and `tap_get(url)` also write `hx-post` or `hx-get` and
-`hx-trigger="pixi:tap"` on the declaration. Then htmx sends the request:
+`hx-trigger="pixi:tap"` on the declaration. Then htmx sends the request.
+The last of the two calls sets the verb. `tap_target`, `tap_swap`, and
+`tap_vals` need one of them.
 
 ```rust
 (Stage::new()
@@ -91,8 +105,8 @@ logical stage pixels.
         .tap_swap("outerHTML")))
 ```
 
-The server can answer with the next stage. The runtime frees the old stage
-and builds the new stage.
+The server can send the next stage. The runtime frees the old stage and
+builds the new stage.
 
 You can also listen anywhere on the page:
 
@@ -100,23 +114,56 @@ You can also listen anywhere on the page:
 <div hx-post="/log" hx-trigger="pixi:tap from:#coin"></div>
 ```
 
+### CSRF
+
+In the `prod` profile, Autumn turns on CSRF protection. Then each
+`tap_post` request needs the token. Add the Autumn htmx CSRF helper and the
+token tag to the layout:
+
+```rust
+use autumn_web::security::CsrfToken;
+
+#[get("/")]
+async fn index(csrf: Option<CsrfToken>) -> Markup {
+    html! {
+        head {
+            @if let Some(token) = &csrf {
+                meta name="csrf-token" content=(token.token());
+            }
+            script src=(asset_url("js/autumn-htmx-csrf.js")) defer {}
+            // pixi_script(), htmx, ...
+        }
+    }
+}
+```
+
+Do not put a stage with tap requests in a `<form>`. htmx adds the fields of
+the closest form to each non-GET request.
+
 ## htmx
 
 The runtime scans the page after each htmx swap. When htmx or a script
 removes a stage element, the runtime frees the stage. This releases the
 WebGL context.
 
-When a swap or a script changes a stage, the runtime builds the stage
-again. A change is: a declaration that is added or removed, a changed
-`data-pixi-*` attribute or `id` of a declaration, changed text in a text
-declaration, or a changed stage attribute. Other content in the stage
-element does not start a build.
+These changes start a new build of the stage:
+
+- You add or remove a declaration.
+- You change a `data-pixi-*` attribute or the `id` of a declaration.
+- You change the text of a text declaration.
+- You change a stage attribute.
+- You remove the canvas.
+
+Other content in the stage element does not start a build.
+
+On a history restore (`hx-push-url` and Back), the runtime removes the old
+canvas and builds each stage again. `pixi:ready` fires again.
 
 ## Your own JavaScript
 
 Listen for `pixi:ready`. The event detail is the stage handle. Add the
-listener in a module or `defer` script, so that it runs before
-`DOMContentLoaded`. A script that runs later can read `element.autumnPixi`.
+listener in a module script or a `defer` script. These scripts run before
+the first scan. A script that runs later can read `element.autumnPixi`.
 
 ```js
 document.addEventListener("pixi:ready", (event) => {
@@ -128,8 +175,9 @@ document.addEventListener("pixi:ready", (event) => {
 });
 ```
 
-PixiJS is the global `PIXI`. IIFE builds of PixiJS packages (for example
-filters) work when they load after `pixi_script()`.
+PixiJS is the global `PIXI`. To use an IIFE PixiJS package (for example
+filters), load it as a `defer` script after `pixi_script()`. A script
+without `defer` runs before `PIXI` exists.
 
 | Handle field | Meaning |
 |---|---|
@@ -141,10 +189,11 @@ filters) work when they load after `pixi_script()`.
 | `size` | The logical size `[width, height]`. |
 | `render()` | Renders one frame now. |
 | `requestRender()` | Renders one frame on the next animation frame. |
-| `update()` | Checks for motion again. Call it after you change `motion`. |
+| `update()` | Starts or stops the loop. Call it after you change `motion`. |
 | `looping` | `true` while the loop runs. |
 
-A rebuild makes a new handle. Your `pixi:ready` listener runs again.
+A new build makes a new handle. Your `pixi:ready` listener must add your
+own objects again.
 
 ## Attribute reference
 
@@ -153,8 +202,9 @@ Angles use degrees. Speeds use units per second. Colors use `#rrggbb` or
 `#rgb`. Pairs use `x,y`, or one number for both.
 
 If a value is not valid, the runtime uses the default. The runtime clamps
-numbers to their range. If a kind or URL is not valid, the runtime ignores
-the object and logs a warning.
+numbers to their range. A number with more than 64 characters is not
+valid. If a kind or URL is not valid, the runtime ignores the object and
+logs a warning.
 
 ### Stage (`data-pixi="stage"`)
 
@@ -174,7 +224,7 @@ does not load.
 | Attribute | Values | Default |
 |---|---|---|
 | `id` | element id and PixiJS `label` | none |
-| `data-pixi-label` | accessible name of a tappable object | the `id` |
+| `data-pixi-label` | accessible name of a tappable object | the `id`, else `button` |
 | `data-pixi-position` | logical `x,y` | stage center |
 | `data-pixi-rotation` | degrees, clockwise | `0` |
 | `data-pixi-scale` | `x,y` | `1,1` |
@@ -191,18 +241,21 @@ does not load.
 | `data-pixi-sprite` | image URL (`http(s)` or relative) | — |
 | `data-pixi-tiling` | image URL | — |
 | `data-pixi-sheet` | sprite sheet URL (`.json`) | — |
-| `data-pixi-size` | `w,h`: sprite size, or tiling area | image size; stage size for tiling |
+| `data-pixi-size` | sprite: `w,h` size. Tiling: `w,h` area. Not for sprite sheets. | image size; stage size for tiling |
 | `data-pixi-scroll` | tiling: `x,y` pixels per second | `0,0` |
-| `data-pixi-animation` | animation name in the sheet | the first animation |
-| `data-pixi-fps` | frames per second, `1`–`120` | `12` |
+| `data-pixi-animation` | sheet: animation name | the first animation |
+| `data-pixi-fps` | sheet: frames per second, `1`–`120` | `12` |
+
+An unknown animation name logs a warning. The sheet then plays its first
+animation.
 
 ### Text (`data-pixi-text`)
 
 | Attribute | Values | Default |
 |---|---|---|
-| content | the text (at most 10000 characters) | — |
+| content | the text, trimmed (at most 10000 characters) | — |
 | `data-pixi-font-size` | `1`–`512` | `24` |
-| `data-pixi-font-family` | CSS font family | `sans-serif` |
+| `data-pixi-font-family` | CSS font family (at most 200 characters) | `sans-serif` |
 | `data-pixi-fill` | color | `#000000` |
 | `data-pixi-weight` | `normal`, `bold` | `normal` |
 | `data-pixi-align` | `left`, `center`, `right` | `left` |
@@ -220,8 +273,9 @@ does not load.
 
 Sizes: `rect` w,h (`100,100`) · `rounded-rect` w,h,radius (`100,100,12`) ·
 `circle` r (`50`) · `ellipse` rx,ry (`60,40`) · `star` points,outer,inner
-(`5,50,25`; points `3`–`100`) · `polygon` x1,y1,x2,y2,… (at least 3 and at
-most 512 corners; the anchor does not apply).
+(`5,50,25`; points `3`–`100`) · `polygon` x1,y1,x2,y2,… (at least 3
+corners; the runtime drops corners after 512). A size that is negative or
+not valid uses the default of its kind.
 
 ### Events and states
 
@@ -236,13 +290,18 @@ most 512 corners; the anchor does not apply).
 stateDiagram-v2
     [*] --> loading: scan (load, htmx swap, DOM insert)
     loading --> ready: built
-    loading --> error: no renderer, or an image failed
+    loading --> error: no renderer, an image failed, or the context was lost
+    loading --> disposed: element removed, or htmx cleanup
     ready --> error: WebGL context lost
-    ready --> disposed: element removed
-    ready --> loading: declarations changed
+    ready --> disposed: element removed, or htmx cleanup
+    ready --> loading: declarations, stage attributes, or canvas changed
     error --> loading: element inserted again, or declarations changed
-    disposed --> loading: element inserted again
+    error --> disposed: element removed
+    disposed --> loading: element inserted again, or declarations changed
 ```
+
+A stage in the `error` state stays in that state. Other swaps do not build
+it again.
 
 ## Behavior
 
@@ -251,10 +310,14 @@ stateDiagram-v2
   work. To keep motion in a stage, use `animate_reduced_motion()`.
 - **Performance.** The loop runs only while the stage is visible and has
   motion. A static stage renders only when it changes. The runtime limits
-  the resolution to 2.
-- **Accessibility.** `Stage::label("…")` sets `role="img"` and
-  `aria-label`. The canvas has `aria-hidden="true"`. Tab turns on the
-  PixiJS accessibility layer. Each tappable object then gets a focusable
+  the device pixel ratio to 2. A large text gets a lower resolution, so
+  that its texture stays below 4096 × 4096 pixels.
+- **Touch.** A finger can scroll the page over a stage. A stage with
+  tappable objects also gets taps.
+- **Accessibility.** `Stage::label("…")` sets `aria-label` and
+  `role="img"`. A stage with tappable objects gets `role="group"`. The
+  canvas has `aria-hidden="true"`. Tab turns on the PixiJS accessibility
+  layer (WebGL and Canvas 2D). Each tappable object then gets a focusable
   button with its label.
 
 ## Security and CSP
@@ -263,15 +326,34 @@ stateDiagram-v2
   (`[security.headers.csp_nonce] enabled = true`). It uses no inline
   script, no inline style, no import map, and no `eval`. See
   [ADR 0002](docs/adr/0002-csp-without-eval-or-blob-workers.md).
-- Images and sprite sheets from other origins need `img-src` and
-  `connect-src` entries in the CSP.
-- Do not let user content keep `data-pixi-*` or `hx-*` attributes. A
-  sanitizer that keeps `data-*` attributes lets user markup start stages,
-  load image URLs, and send requests on taps.
+- Custom PixiJS code also runs with no `eval`, `ParticleContainer`
+  included. `HTMLText` and `Graphics.svg()` set inline styles: nonce mode
+  blocks them.
+- If you change the CSP, keep these sources:
+  - `img-src 'self' data:`: SVG sprites and PixiJS format checks use
+    `data:` URLs.
+  - `connect-src`: PixiJS loads images and sheets with `fetch`.
+- Images from another origin need entries in `img-src` and `connect-src`,
+  and the image host must send `Access-Control-Allow-Origin`. A custom CSP
+  turns off automatic nonce injection. Example:
+
+  ```toml
+  [security.headers]
+  content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://cdn.example.com; connect-src 'self' https://cdn.example.com"
+  ```
+
+- URLs that start with `//` or `/\` go to another origin. Check user image
+  URLs on the server.
+- Do not let user content keep `data-pixi-*`, `hx-*`, or `data-hx-*`
+  attributes. A sanitizer that keeps `data-*` attributes lets user markup
+  start stages, load image URLs, and send requests on taps.
+- `tap_vals` takes JSON. Do not use the `js:` prefix of htmx.
 - SRI covers all tags of `pixi_script()` and `pixi_stylesheet()`.
+  `parse.js` gets SRI from `<link rel="modulepreload">` (Safari 17 or later,
+  Firefox 115 or later). See [ADR 0001](docs/adr/0001-iife-build-and-global.md).
 
 htmx adds an inline `<style>` for its indicators. Nonce mode blocks this
-style. To stop the style, add this tag to the layout:
+style. To remove the style, add this tag to the layout:
 
 ```rust
 meta name="htmx-config" content=r#"{"includeIndicatorStyles":false}"#;
@@ -305,8 +387,15 @@ cargo build --example e2e_fixture --example pixi_demo
 npm run test:e2e                          # Chromium + WebGL (SwiftShader)
 ```
 
-The E2E tests read real canvas pixels. They also run in CSP nonce mode.
-They measure strict line coverage of `init.js` (minimum 95 %).
+The E2E tests read real canvas pixels. They also run in CSP nonce mode and
+with CSRF on. They measure strict line coverage of `init.js` (minimum
+95 %).
+
+## Upgrade PixiJS
+
+Users: update the crate version to get a newer PixiJS.
+
+Maintainers: follow the steps at the top of `scripts/vendor.sh`.
 
 ## Limits
 
@@ -316,13 +405,11 @@ They measure strict line coverage of `init.js` (minimum 95 %).
 - Each WebGL stage has its own context. Browsers keep about 16 contexts.
   When the browser drops a context, the stage shows its fallback. Use
   `Renderer::Canvas` for many small stages.
-- Image URLs must end with an image extension. Sprite sheet URLs must end
-  with `.json`.
+- The path of an image URL must end with an image extension. The path of a
+  sprite sheet URL must end with `.json`. PixiJS does not load GIF files.
 - Textures stay in the PixiJS asset cache for the page lifetime.
-- A change rebuilds the whole stage. Objects that your code added must be
-  added again in `pixi:ready`.
-- To upgrade PixiJS, release a new plugin version. Use
-  `scripts/vendor.sh`.
+- A change builds the whole stage again. Your `pixi:ready` listener must
+  add your own objects again.
 
 ## License
 

@@ -11,7 +11,7 @@ and comments (short sentences, active voice, simple present).
 | `src/plugin.rs` | `PixiPlugin` (installs the bundle). |
 | `src/script.rs` | `pixi_script()`, `pixi_stylesheet()`. |
 | `src/stage.rs` | Typed builder → `data-pixi-*` markup. |
-| `assets/parse.js` | Pure attribute parsers. Node-tested. |
+| `assets/parse.js` | Pure attribute parsers and limits. Node-tested. |
 | `assets/init.js` | Runtime: build, loop, taps, free. E2E-tested. |
 | `assets/pixi.css` | Default size, hidden declarations, fallback. |
 | `assets/pixi.min.js`, `assets/unsafe-eval.min.js` | Vendored PixiJS 8.22.0. Do not edit. |
@@ -35,8 +35,10 @@ and comments (short sentences, active voice, simple present).
   `VENDORED` and `assets/manifest.json` in the same commit.
 - The compiler embeds `init.js`. Rebuild the fixture before you run E2E
   tests.
-- `init.js` must not count its own canvas insertion as a stage change. A
-  rebuild loop then blocks the page `load` event.
+- `init.js` must not count its own canvas insertion as a stage change. If
+  it does, a rebuild loop blocks the page `load` event.
+- For "no rebuild" checks, read `states(page, id)` (the recorded
+  `data-pixi-state` changes). Do not count events after a fixed sleep.
 - E2E predicates: the page CSP blocks `eval`, so `page.waitForFunction`
   with a source string fails. Use `until()` (Node-side polling).
 

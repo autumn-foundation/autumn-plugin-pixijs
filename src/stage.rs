@@ -352,7 +352,7 @@ macro_rules! common_setters {
 
         /// Makes the object tappable. A tap (click, touch, or Enter on the
         /// focused accessible button) sends a bubbling `pixi:tap` event from
-        /// the declaration element. Keyboard access needs the WebGL renderer.
+        /// the declaration element.
         pub const fn tappable(mut self) -> Self {
             self.common.tap = true;
             self

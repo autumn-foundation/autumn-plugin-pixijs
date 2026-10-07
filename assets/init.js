@@ -8,7 +8,7 @@
 // PixiJS is the global `PIXI` (pixi.min.js). unsafe-eval.min.js patches it
 // before this module runs, so PixiJS needs no `eval`.
 
-import { ATTR, STAGE, readStage } from "./parse.js";
+import { ATTR, LIMITS, STAGE, readStage } from "./parse.js";
 
 const SELECTOR = `[${ATTR.stage}="${STAGE}"]`;
 /** Attributes that mark a declaration and its kind. */
@@ -17,12 +17,14 @@ const DECLARATION = KINDS.map((attr) => `[${attr}]`).join(",");
 /** Stage attributes that change the build. */
 const STAGE_ATTRS = new Set([ATTR.size, ATTR.background, ATTR.renderer, ATTR.reduced]);
 /** Attributes that the observer watches. The runtime writes none of them. */
-const WATCHED = ["id", ...Object.values(ATTR).filter((a) => ![ATTR.stage, ATTR.state, ATTR.canvas, ATTR.fallback].includes(a))];
+const WATCHED = ["id", ...Object.values(ATTR).filter((a) => ![ATTR.state, ATTR.canvas, ATTR.a11y, ATTR.fallback].includes(a))];
 /** Renderer preference lists per `data-pixi-renderer` value. */
 const PREFERENCE = { auto: ["webgl", "canvas"], webgl: ["webgl"], canvas: ["canvas"] };
 const DEG = Math.PI / 180;
 const MAX_RESOLUTION = 2;
 const MAX_TEXT_RESOLUTION = 4;
+/** Largest text texture, in device pixels. Larger text gets a lower resolution. */
+const MAX_TEXT_PIXELS = 4096 * 4096;
 const MAX_DELTA_SECONDS = 0.1;
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 
@@ -30,19 +32,35 @@ const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const live = new Map();
 
 /**
- * Elements that failed, or were freed by htmx, while in the document.
- * Scans skip them. They build again only after they leave the document
- * and come back, or when their declarations change.
+ * This set holds elements that failed, or that htmx freed, while they were
+ * in the document. Scans skip them. They build again when they leave the
+ * document and come back, or when their declarations change.
  */
 const parked = new WeakSet();
 
-/** PixiJS settings for all stages. They run once. */
+/** PixiJS settings for the page. They run once, before page code uses PixiJS. */
 let configured = false;
 function configure(PIXI) {
   if (configured) return;
   configured = true;
   // The texture loader starts workers from `blob:` URLs. `script-src 'self'` blocks them.
   PIXI.Assets.setPreferences({ preferWorkers: false });
+  // PixiJS gives the accessibility layer to WebGL and WebGPU only. Give it
+  // to Canvas 2D too, so that keyboard users can tap there.
+  if (PIXI.AccessibilitySystem && PIXI.ExtensionType?.CanvasSystem) {
+    PIXI.extensions.add({ type: [PIXI.ExtensionType.CanvasSystem], name: "accessibility", ref: PIXI.AccessibilitySystem });
+  }
+  // The unsafe-eval IIFE patches its own copy of ParticleBuffer. Patch the real one too.
+  if (PIXI.ParticleBuffer && PIXI.generateParticleUpdatePolyfill) {
+    PIXI.ParticleBuffer.prototype.generateParticleUpdate = PIXI.generateParticleUpdatePolyfill;
+  }
+}
+
+/** The element aspect ratio of a stage, clamped to `LIMITS.aspect`. */
+function aspectRatio(state) {
+  const [width, height] = state.config.size;
+  const [min, max] = LIMITS.aspect;
+  return String(Math.min(max, Math.max(min, width / height)));
 }
 
 /** Sends a bubbling event from `el`. */
@@ -101,9 +119,14 @@ function resize(state) {
   const scale = Math.min(w / width, h / height);
   root.scale.set(scale);
   root.position.set((w - width * scale) / 2, (h - height * scale) / 2);
-  // Text is a bitmap. Keep it sharp when the stage scales up.
+  // Text is a bitmap. Keep it sharp when the stage scales up, but keep
+  // its texture below MAX_TEXT_PIXELS.
   const textResolution = Math.min(MAX_TEXT_RESOLUTION, Math.max(1, resolution * scale));
-  for (const text of state.texts) text.resolution = textResolution;
+  for (const text of state.texts) {
+    const bounds = text.getLocalBounds();
+    const area = Math.max(1, bounds.width * bounds.height);
+    text.resolution = Math.min(textResolution, Math.sqrt(MAX_TEXT_PIXELS / area));
+  }
   renderNow(state);
 }
 
@@ -111,6 +134,7 @@ function resize(state) {
 function dispose(state) {
   if (state.disposed) return;
   state.disposed = true;
+  state.looping = false;
   live.delete(state.el);
   cancelAnimationFrame(state.frame);
   for (const observer of state.observers) observer.disconnect();
@@ -132,21 +156,28 @@ async function load(PIXI, o) {
   return asset;
 }
 
-/** Draws a shape. The anchor moves the bounding box; it does not apply to polygons. */
+/**
+ * Draws a shape around the origin. The anchor sets the pivot within the
+ * bounds (stroke included). Polygon corners are relative to the position:
+ * the anchor does not apply.
+ */
 function makeShape(PIXI, o) {
   const g = new PIXI.Graphics();
-  const [ax, ay] = o.anchor;
   const a = o.args;
   switch (o.kind) {
-    case "rect": g.rect(-ax * a[0], -ay * a[1], a[0], a[1]); break;
-    case "rounded-rect": g.roundRect(-ax * a[0], -ay * a[1], a[0], a[1], a[2]); break;
-    case "circle": g.circle((1 - 2 * ax) * a[0], (1 - 2 * ay) * a[0], a[0]); break;
-    case "ellipse": g.ellipse((1 - 2 * ax) * a[0], (1 - 2 * ay) * a[1], a[0], a[1]); break;
-    case "star": g.star((1 - 2 * ax) * a[1], (1 - 2 * ay) * a[1], a[0], a[1], a[2]); break;
+    case "rect": g.rect(-a[0] / 2, -a[1] / 2, a[0], a[1]); break;
+    case "rounded-rect": g.roundRect(-a[0] / 2, -a[1] / 2, a[0], a[1], a[2]); break;
+    case "circle": g.circle(0, 0, a[0]); break;
+    case "ellipse": g.ellipse(0, 0, a[0], a[1]); break;
+    case "star": g.star(0, 0, a[0], a[1], a[2]); break;
     default: g.poly(a);
   }
   if (o.fill !== null) g.fill(o.fill);
   if (o.stroke !== null) g.stroke({ width: o.strokeWidth, color: o.stroke });
+  if (o.kind !== "polygon") {
+    const b = g.getLocalBounds();
+    g.pivot.set(b.x + o.anchor[0] * b.width, b.y + o.anchor[1] * b.height);
+  }
   return g;
 }
 
@@ -267,9 +298,10 @@ function build(el) {
   };
   live.set(el, state);
   el.setAttribute(ATTR.state, "loading");
-  el.style.aspectRatio = `${config.size[0]} / ${config.size[1]}`;
-  // An htmx history snapshot can restore an old canvas. Remove it.
-  for (const stale of el.querySelectorAll(`:scope > canvas[${ATTR.canvas}]`)) stale.remove();
+  el.style.aspectRatio = aspectRatio(state);
+  // An htmx history snapshot can restore an old canvas and an old
+  // accessibility layer. Remove them.
+  for (const stale of el.querySelectorAll(`:scope > canvas[${ATTR.canvas}], :scope > [${ATTR.a11y}]`)) stale.remove();
   populate(state).catch((error) => {
     if (state.disposed) return;
     dispose(state);
@@ -284,9 +316,7 @@ async function populate(state) {
   if (!PIXI?.Application) throw new Error("PixiJS is not loaded. Put pixi_script() in the page <head>.");
   configure(PIXI);
   const loads = Promise.allSettled(config.objects.map((o) => load(PIXI, o)));
-  const app = new PIXI.Application();
-  state.app = app;
-  await app.init({
+  const options = {
     preference: PREFERENCE[config.renderer],
     background: config.background ?? 0x000000,
     backgroundAlpha: config.background === null ? 0 : 1,
@@ -297,7 +327,19 @@ async function populate(state) {
     sharedTicker: false,
     width: Math.max(1, el.clientWidth),
     height: Math.max(1, el.clientHeight),
-  });
+  };
+  let app = new PIXI.Application();
+  state.app = app;
+  try {
+    await app.init(options);
+  } catch (error) {
+    // PixiJS picks WebGL when a test context works. The real context can still fail.
+    if (config.renderer !== "auto" || state.disposed) throw error;
+    console.warn("autumn-plugin-pixijs: WebGL failed, Canvas 2D is used:", error);
+    app = new PIXI.Application();
+    state.app = app;
+    await app.init({ ...options, preference: ["canvas"] });
+  }
   if (state.disposed) {
     app.destroy({ removeView: true }, { children: true });
     return;
@@ -333,6 +375,8 @@ async function populate(state) {
   config.objects.forEach((o, i) => {
     if (results[i].status === "fulfilled") place(state, make(PIXI, state, o, results[i].value), o);
   });
+  // PixiJS blocks touch scrolling on its canvas. Allow it: taps still work.
+  canvas.style.touchAction = state.tappable ? "manipulation" : "auto";
 
   const resizeObserver = new ResizeObserver(() => resize(state));
   const viewObserver = new IntersectionObserver((entries) => {
@@ -377,11 +421,12 @@ function stagesIn(node) {
   return found;
 }
 
-/** Builds every new connected stage in `node`. */
-function scan(node) {
+/** Builds every new connected stage in `node`. Adds each built element to `built`. */
+function scan(node, built = new Set()) {
   for (const el of stagesIn(node)) {
     if (live.has(el) || parked.has(el) || !el.isConnected) continue;
     build(el);
+    built.add(el);
   }
 }
 
@@ -405,6 +450,8 @@ function changedStage(record) {
   const { target } = record;
   const node = target.nodeType === Node.ELEMENT_NODE ? target : target.parentElement;
   if (!node) return null;
+  // A removed kind attribute: the element is no longer a declaration.
+  if (KINDS.includes(record.attributeName) && node.parentElement?.matches(SELECTOR)) return node.parentElement;
   if (node.matches(SELECTOR)) {
     if (record.type === "attributes") return STAGE_ATTRS.has(record.attributeName) ? node : null;
     const canvas = live.get(node)?.canvas;
@@ -427,15 +474,32 @@ function rebuild(el) {
   scan(el);
 }
 
+/** Tags the PixiJS accessibility layer of a stage. pixi.css then places it. */
+function tagLayer(record) {
+  const layer = live.get(record.target)?.app?.renderer?.accessibility?.div;
+  for (const node of record.addedNodes) if (node === layer) node.setAttribute(ATTR.a11y, "");
+}
+
 new MutationObserver((records) => {
   const changed = new Set();
+  const built = new Set();
   for (const record of records) {
+    if (record.attributeName === ATTR.stage) {
+      // The element became a stage, or stopped being one.
+      const el = record.target;
+      const state = live.get(el);
+      if (state && !el.matches(SELECTOR)) dispose(state);
+      scan(el, built);
+      continue;
+    }
     for (const node of record.removedNodes) sweep(node);
-    for (const node of record.addedNodes) scan(node);
+    for (const node of record.addedNodes) scan(node, built);
+    tagLayer(record);
     const stage = changedStage(record);
     if (stage) changed.add(stage);
   }
-  for (const el of changed) if (el.isConnected) rebuild(el);
+  // A stage built in this batch already has its current declarations.
+  for (const el of changed) if (el.isConnected && !built.has(el)) rebuild(el);
 }).observe(document.documentElement, {
   childList: true,
   subtree: true,
@@ -460,6 +524,25 @@ reducedMotion.addEventListener("change", () => {
   for (const state of live.values()) if (state.ready) updateLoop(state);
 });
 
+// htmx settles a swap: it puts back the old `style` of an element with the
+// same id. Set the aspect ratio again.
+document.addEventListener("htmx:afterSettle", () => {
+  for (const state of live.values()) state.el.style.aspectRatio = aspectRatio(state);
+});
+
+// A move to a screen with another pixel ratio does not resize the element.
+let pixelRatio = null;
+function watchPixelRatio() {
+  pixelRatio?.removeEventListener("change", onPixelRatio);
+  pixelRatio = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  pixelRatio.addEventListener("change", onPixelRatio);
+}
+function onPixelRatio() {
+  for (const state of live.values()) if (state.ready) resize(state);
+  watchPixelRatio();
+}
+watchPixelRatio();
+
 // Tab turns on the PixiJS accessibility layer. It adds its buttons at the
 // next render, so render the stages that have tappable objects.
 document.addEventListener("keydown", (event) => {
@@ -467,8 +550,11 @@ document.addEventListener("keydown", (event) => {
   for (const state of live.values()) if (state.tappable) requestRender(state);
 });
 
-// First scan after DOMContentLoaded: then every deferred and module script
-// on the page has run, and their `pixi:ready` listeners exist.
+// Configure PixiJS now. Later defer and module scripts can use it at once.
+if (globalThis.PIXI?.Application) configure(globalThis.PIXI);
+
+// The first scan occurs after DOMContentLoaded. At that time, all defer and
+// module scripts have run, and their `pixi:ready` listeners exist.
 const navigation = performance.getEntriesByType?.("navigation")?.[0];
 if (document.readyState === "loading" || navigation?.domContentLoadedEventStart === 0) {
   document.addEventListener("DOMContentLoaded", () => scan(document), { once: true });

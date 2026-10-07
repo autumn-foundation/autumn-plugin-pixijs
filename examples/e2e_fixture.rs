@@ -51,6 +51,12 @@ async fn main() {
             params,
             late_script,
             wrong_type,
+            square_swap,
+            square_swap_next,
+            no_stage,
+            big_text,
+            tall,
+            tap_canvas,
         ])
         .run()
         .await;
@@ -243,8 +249,12 @@ async fn offscreen() -> Markup {
 async fn tap_page() -> Markup {
     TAPS.store(0, Ordering::SeqCst);
     page(&html! {
+        // The stage is not at the page top. Accessible buttons must still
+        // cover their objects.
+        div class="pad" {}
         (Stage::new()
             .id("stage")
+            .label("Tap game")
             .add(
                 red_rect()
                     .id("button")
@@ -320,7 +330,8 @@ async fn params() -> Markup {
                     .align(Align::Center)
                     .wrap(120.0),
             )
-            .add(Shape::star(6, 40.0, 20.0).id("star").fill(Color::hex(0x00ab_cdef)).stroke(Color::BLACK, 5.0)))
+            .add(Shape::star(6, 40.0, 20.0).id("star").fill(Color::hex(0x00ab_cdef)).stroke(Color::BLACK, 5.0))
+            .add(Shape::star(3, 40.0, 20.0).id("star3").anchor([0.5, 1.0])))
     })
 }
 
@@ -352,4 +363,63 @@ async fn wrong_type(kind: autumn_web::extract::Path<String>) -> Markup {
         _ => AnimatedSprite::new("/static/img/frames.json").into(),
     };
     page(&html! { (Stage::new().id("stage").add(object).fallback(fallback())) })
+}
+
+/// A square stage that swaps itself (same id) on a click.
+fn square(n: u32) -> Markup {
+    html! {
+        (Stage::new()
+            .id("sq")
+            .size(400.0, 400.0)
+            .add(Text::new(format!("{n}")).font_size(80.0)))
+    }
+}
+
+#[autumn_web::get("/square-swap")]
+async fn square_swap() -> Markup {
+    page(&html! {
+        button id="next" hx-get="/square-swap/next" hx-target="#sq" hx-swap="outerHTML" { "Next" }
+        div class="narrow" { (square(1)) }
+    })
+}
+
+#[autumn_web::get("/square-swap/next")]
+async fn square_swap_next() -> Markup {
+    square(2)
+}
+
+/// `pixi_script()` and no stage. Page code uses PixiJS directly.
+#[autumn_web::get("/no-stage")]
+async fn no_stage() -> Markup {
+    page(&html! { p { "No stage." } })
+}
+
+/// Large text: the runtime must cap its texture size.
+#[autumn_web::get("/big-text")]
+async fn big_text() -> Markup {
+    page(&html! {
+        (Stage::new()
+            .id("stage")
+            .size(8192.0, 8192.0)
+            .add(Text::new("W".repeat(400)).id("text").font_size(512.0).wrap(8192.0)))
+    })
+}
+
+/// An extreme stage size: the element aspect ratio clamps to 1/10.
+#[autumn_web::get("/tall")]
+async fn tall() -> Markup {
+    page(&html! {
+        div class="narrow" { (Stage::new().id("stage").size(1.0, 8192.0).add(Shape::circle(1.0))) }
+    })
+}
+
+/// A tappable object on the Canvas 2D renderer.
+#[autumn_web::get("/tap-canvas")]
+async fn tap_canvas() -> Markup {
+    page(&html! {
+        (Stage::new()
+            .id("stage")
+            .renderer(Renderer::Canvas)
+            .add(red_rect().id("button").label("Press me").tappable()))
+    })
 }

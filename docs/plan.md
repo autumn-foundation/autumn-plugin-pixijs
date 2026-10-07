@@ -26,7 +26,7 @@ from the request and from the sibling plugins.
 | AC5 | The runtime builds stages on load, after htmx swaps, and on DOM insertion. It builds a stage again when its declarations change. It frees the renderer when the stage leaves the document. It never builds a stage two times. |
 | AC6 | A tappable object sends a bubbling `pixi:tap` DOM event from its declaration element. An htmx trigger can use it. Keyboard users can tap the object. |
 | AC7 | Custom JavaScript gets `pixi:ready` and `pixi:error` events and an `element.autumnPixi` handle. The page has one `PIXI` global. |
-| AC8 | A bad attribute value uses the default and logs a warning. A failed image load shows the fallback, or keeps the other objects when there is no fallback. The fallback shows without JavaScript or a renderer. |
+| AC8 | A bad attribute value uses the default. A bad kind or URL skips the object and logs a warning. A failed image load shows the fallback, or keeps the other objects when there is no fallback. The fallback shows without JavaScript or a renderer. |
 | AC9 | Reduced motion stops automatic motion unless the stage opts in. The loop stops off screen. A static stage renders only on change. The pixel ratio is at most 2. A label gives `role="img"`. |
 | AC10 | `cargo fmt`, `cargo clippy` (pedantic + nursery, `-D warnings`), and all tests pass. Line coverage: Rust ≥ 85 %, `parse.js` ≥ 85 %, `init.js` (E2E) ≥ 95 %. CI runs all gates. |
 | AC11 | README, CLAUDE.md, this plan, ADRs, and rustdoc exist. They use ASD-STE100. |
@@ -151,3 +151,31 @@ Question: "How can we make this plugin fail?" Then invert each answer.
 | 6 | `init.js` runtime | E2E (Chromium + WebGL) |
 | 7 | Example + fixture images | E2E |
 | 8 | CI, README, ADRs, CLAUDE.md | review |
+
+## 8. Review (REFACTOR)
+
+Five review agents checked the GREEN code: runtime correctness, security
+and CSP, Rust API, tests and CI, and documentation. Each finding got a test
+first, then a fix. The main fixes:
+
+| Area | Finding | Fix |
+|---|---|---|
+| Security | The `NUMBER` regex backtracks (ReDoS) on long digit runs. | Linear regex; numbers have at most 64 characters. |
+| Security | The worker setting ran only at the first build. | `init.js` sets it when it loads. |
+| Security | `ParticleContainer` still used `new Function`. | Patch `PIXI.ParticleBuffer`. |
+| Security | `tap_post` fails with CSRF on. | Demo and README use the Autumn CSRF helper. E2E test with CSRF on. |
+| Security | Large text and extreme sizes use too much memory. | Text texture budget, aspect clamp, object limit. |
+| Runtime | Accessibility buttons were offset by the stage position. | Tag the layer; CSS removes the move. |
+| Runtime | Stages blocked touch scrolling. | `touch-action: auto` or `manipulation`. |
+| Runtime | htmx settle removed the aspect ratio. | Set it again on `htmx:afterSettle`. |
+| Runtime | `data-pixi` removal leaked a context; kind removal did not rebuild. | Watch `data-pixi` and kind attributes. |
+| Runtime | One batch could build a stage two times. | Skip the rebuild of a stage built in the batch. |
+| Runtime | Star anchors used a wrong box. | Pivot from the shape bounds. |
+| Runtime | A DPR change kept the old resolution. | `matchMedia` resolution listener. |
+| Runtime | `auto` did not fall back when the WebGL renderer failed. | Retry with Canvas 2D. |
+| Accessibility | `role="img"` hid the buttons. | `role="group"` with tappable objects. |
+| Accessibility | Canvas 2D had no keyboard access. | Register the PixiJS accessibility system for Canvas 2D. |
+| Rust | Two tap verbs; options without a verb. | One verb; options need it. |
+| Rust | Limits and defaults were copied by hand. | Tests compare them with `parse.js`. |
+| Tests | Weak assertions and fixed sleeps. | State-transition recorder, frame counters, per-test cleanup. |
+| Docs | Wrong claims (GIF, state diagram, defaults). | Corrected; ASD-STE100 rewrites. |

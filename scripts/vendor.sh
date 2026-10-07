@@ -5,6 +5,16 @@
 # the files. Keep the pins in sync with VENDORED in src/assets.rs and with
 # assets/manifest.json.
 # Needs curl, openssl, and coreutils (base64 -w0).
+#
+# To upgrade PixiJS:
+# 1. Get each new pin:
+#    curl -fsSL --proto '=https' --tlsv1.2 URL | openssl dgst -sha384 -binary | base64 -w0
+#    Compare it with the npm tarball of the same version.
+# 2. Set VERSION and the pins below.
+# 3. Run this script.
+# 4. Update PIXI_VERSION and VENDORED (src/assets.rs), assets/manifest.json,
+#    and the version in README.md, CLAUDE.md, and src/lib.rs.
+# 5. Run all tests (see CLAUDE.md).
 set -euo pipefail
 
 VERSION="8.22.0"
@@ -22,7 +32,7 @@ FILES=(
 
 for entry in "${FILES[@]}"; do
   IFS='|' read -r upstream name pin <<<"${entry}"
-  curl -fsSL "${BASE}/${upstream}" -o "${TMP}/${name}"
+  curl -fsSL --proto '=https' --tlsv1.2 "${BASE}/${upstream}" -o "${TMP}/${name}"
   actual="$(openssl dgst -sha384 -binary "${TMP}/${name}" | base64 -w0)"
   if [[ "${actual}" != "${pin}" ]]; then
     echo "sha384 mismatch: ${upstream}" >&2

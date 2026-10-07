@@ -7,12 +7,31 @@ import assert from "node:assert/strict";
 import { assertClean, read, start, until } from "./harness.mjs";
 
 let app;
+let csrfApp;
 before(async () => {
   app = await start({ example: "pixi_demo", ready: "/" });
+  // The `prod` profile turns CSRF on. Test the demo with CSRF on, too.
+  csrfApp = await start({ example: "pixi_demo", ready: "/", toml: "[security.csrf]\nenabled = true\n" });
 });
 after(async () => {
   await app?.close();
+  await csrfApp?.close();
 });
+
+/** The number of coins in the game stage. */
+const coins = (page) => read(page, "game", (h) => h.objects.filter((o) => o.label.startsWith("coin-")).length);
+
+/** Clicks the first coin of the game stage. */
+async function tapFirstCoin(page) {
+  await page.locator("#game").scrollIntoViewIfNeeded();
+  const point = await read(page, "game", (h) => {
+    const coin = h.objects.find((o) => o.label.startsWith("coin-"));
+    const global = coin.getGlobalPosition();
+    return { x: global.x, y: global.y };
+  });
+  const box = await page.locator("#game > canvas").boundingBox();
+  await page.mouse.click(box.x + point.x, box.y + point.y);
+}
 
 /** States of all stages on the page. */
 const states = (page) =>
@@ -29,16 +48,8 @@ test("the demo page builds every stage with no errors", async () => {
   await page.waitForLoadState("load");
 
   // Coin game: a tap on a coin posts to the server, which sends the next stage.
-  await page.locator("#game").scrollIntoViewIfNeeded();
-  const coins = () => read(page, "game", (h) => h.objects.filter((o) => o.label.startsWith("coin-")).length);
-  assert.equal(await coins(), 5);
-  const point = await read(page, "game", (h) => {
-    const coin = h.root.getChildByLabel("coin-0");
-    const global = coin.getGlobalPosition();
-    return { x: global.x, y: global.y };
-  });
-  const box = await page.locator("#game > canvas").boundingBox();
-  await page.mouse.click(box.x + point.x, box.y + point.y);
+  assert.equal(await coins(page), 5);
+  await tapFirstCoin(page);
   await until(page, "game", (h) => h.objects.filter((o) => o.label.startsWith("coin-")).length === 4);
   assert.equal(await read(page, "game", (h) => h.root.getChildByLabel("score").text), "Score: 1 / 5");
 
@@ -65,5 +76,19 @@ test("the demo page builds every stage with no errors", async () => {
   const before = await x();
   await until(page, "custom", new Function(`return (h) => h.root.getChildByLabel("ball").x !== ${before}`)());
 
+  await assertClean(page, assert);
+});
+
+test("with CSRF on, a tap request sends the token and passes", async () => {
+  const blocked = await fetch(`${csrfApp.base}/reset`, { method: "POST" });
+  assert.equal(blocked.status, 403, "CSRF is on: a POST without the token fails");
+
+  const page = await csrfApp.open("/", { viewport: { width: 1000, height: 900 } });
+  await page.waitForFunction(() => document.getElementById("game")?.getAttribute("data-pixi-state") === "ready");
+  await page.waitForLoadState("load");
+  assert.equal(await page.locator('meta[name="csrf-token"]').count(), 1);
+  const before = await coins(page);
+  await tapFirstCoin(page);
+  await until(page, "game", new Function(`return (h) => h.objects.filter((o) => o.label.startsWith("coin-")).length === ${before - 1}`)());
   await assertClean(page, assert);
 });

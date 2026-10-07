@@ -26,6 +26,7 @@ use autumn_plugin_pixijs::{
     pixi_script, pixi_stylesheet,
 };
 use autumn_web::assets::asset_url;
+use autumn_web::security::CsrfToken;
 use autumn_web::{Markup, html};
 
 /// The crate `static/` dir: demo CSS, demo JS, and images.
@@ -56,8 +57,9 @@ async fn main() {
         .await;
 }
 
-/// The page shell.
-fn layout(content: &Markup) -> Markup {
+/// The page shell. With CSRF on (the `prod` profile), the token tag and the
+/// Autumn htmx CSRF helper let `tap_post` requests pass.
+fn layout(csrf: Option<&CsrfToken>, content: &Markup) -> Markup {
     html! {
         (maud::DOCTYPE)
         html lang="en" {
@@ -68,6 +70,10 @@ fn layout(content: &Markup) -> Markup {
                 // blocks it, so turn it off.
                 meta name="htmx-config" content=r#"{"includeIndicatorStyles":false}"#;
                 title { "PixiJS demo" }
+                @if let Some(token) = csrf {
+                    meta name="csrf-token" content=(token.token());
+                }
+                script src=(asset_url("js/autumn-htmx-csrf.js")) defer {}
                 link rel="stylesheet" href=(asset_url("css/demo.css"));
                 (pixi_stylesheet())
                 (pixi_script())
@@ -129,57 +135,60 @@ fn game(collected: [bool; COINS.len()]) -> Markup {
 }
 
 #[autumn_web::get("/")]
-async fn index() -> Markup {
-    layout(&html! {
-        section class="hero" {
-            div {
-                p class="kicker" { "autumn-plugin-pixijs" }
-                h1 { "2D canvas in server-rendered HTML." }
-                p { "Each stage on this page is Maud markup. Tap a coin." }
+async fn index(csrf: Option<CsrfToken>) -> Markup {
+    layout(
+        csrf.as_ref(),
+        &html! {
+            section class="hero" {
+                div {
+                    p class="kicker" { "autumn-plugin-pixijs" }
+                    h1 { "2D canvas in server-rendered HTML." }
+                    p { "Each stage on this page is Maud markup. Tap a coin." }
+                }
+                (Stage::new()
+                    .id("hero")
+                    .class("hero-stage")
+                    .label("A star field with a spinning orange star")
+                    .size(600.0, 400.0)
+                    .add(TilingSprite::new("/static/img/stars.png", 600.0, 400.0).scroll(-20.0, 8.0))
+                    .add(Shape::star(5, 110.0, 50.0).fill(Color::hex(0x00ff_7a18)).stroke(Color::WHITE, 4.0).spin(20.0))
+                    .add(AnimatedSprite::new("/static/img/pulse.json").fps(8.0).position([480.0, 300.0]))
+                    .add(Text::new("PixiJS 8").font_size(40.0).fill(Color::WHITE).bold().position([300.0, 360.0]))
+                    .fallback(html! { p class="fallback" { "This stage needs JavaScript." } }))
             }
-            (Stage::new()
-                .id("hero")
-                .class("hero-stage")
-                .label("A star field with a spinning orange star")
-                .size(600.0, 400.0)
-                .add(TilingSprite::new("/static/img/stars.png", 600.0, 400.0).scroll(-20.0, 8.0))
-                .add(Shape::star(5, 110.0, 50.0).fill(Color::hex(0x00ff_7a18)).stroke(Color::WHITE, 4.0).spin(20.0))
-                .add(AnimatedSprite::new("/static/img/pulse.json").fps(8.0).position([480.0, 300.0]))
-                .add(Text::new("PixiJS 8").font_size(40.0).fill(Color::WHITE).bold().position([300.0, 360.0]))
-                .fallback(html! { p class="fallback" { "This stage needs JavaScript." } }))
-        }
-        section {
-            h2 { "Coin game (htmx)" }
-            p { "A tap sends " code { "POST /collect/{n}" } ". The server sends the next stage." }
-            (game(collected()))
-            button hx-post="/reset" hx-target="#game" hx-swap="outerHTML" { "Reset" }
-        }
-        section {
-            h2 { "Gallery (htmx)" }
-            button hx-get="/shape" hx-target="#gallery" hx-swap="innerHTML" { "Next shape" }
-            div id="gallery" { (gallery_stage(0)) }
-        }
-        section class="pair" {
-            div {
-                h2 { "Raw attributes" }
-                (maud::PreEscaped(r##"<div data-pixi="stage" data-pixi-size="400,240" data-pixi-background="#1e293b" role="img" aria-label="Three shapes">
+            section {
+                h2 { "Coin game (htmx)" }
+                p { "A tap sends " code { "POST /collect/{n}" } ". The server sends the next stage." }
+                (game(collected()))
+                button hx-post="/reset" hx-target="#game" hx-swap="outerHTML" { "Reset" }
+            }
+            section {
+                h2 { "Gallery (htmx)" }
+                button hx-get="/shape" hx-target="#gallery" hx-swap="innerHTML" { "Next shape" }
+                div id="gallery" { (gallery_stage(0)) }
+            }
+            section class="pair" {
+                div {
+                    h2 { "Raw attributes" }
+                    (maud::PreEscaped(r##"<div data-pixi="stage" data-pixi-size="400,240" data-pixi-background="#1e293b" role="img" aria-label="Three shapes">
   <div hidden data-pixi-shape="circle" data-pixi-args="50" data-pixi-fill="#38bdf8" data-pixi-position="100,120"></div>
   <div hidden data-pixi-shape="rounded-rect" data-pixi-args="100,100,16" data-pixi-fill="#a78bfa" data-pixi-position="200,120" data-pixi-spin="45"></div>
   <div hidden data-pixi-shape="polygon" data-pixi-args="0,-50,50,40,-50,40" data-pixi-fill="#f472b6" data-pixi-position="300,120"></div>
 </div>"##))
+                }
+                div {
+                    h2 { "Custom JavaScript" }
+                    p { "static/js/demo.js adds a bouncing ball in " code { "pixi:ready" } "." }
+                    (Stage::new()
+                        .id("custom")
+                        .size(400.0, 240.0)
+                        .background(Color::hex(0x000f_172a))
+                        .label("A ball that bounces")
+                        .add(Text::new("Custom code").fill(Color::WHITE).align(Align::Center).position([200.0, 30.0])))
+                }
             }
-            div {
-                h2 { "Custom JavaScript" }
-                p { "static/js/demo.js adds a bouncing ball in " code { "pixi:ready" } "." }
-                (Stage::new()
-                    .id("custom")
-                    .size(400.0, 240.0)
-                    .background(Color::hex(0x000f_172a))
-                    .label("A ball that bounces")
-                    .add(Text::new("Custom code").fill(Color::WHITE).align(Align::Center).position([200.0, 30.0])))
-            }
-        }
-    })
+        },
+    )
 }
 
 /// One stage of the gallery.

@@ -30,9 +30,9 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy (pedantic + nursery)
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test
-        run: cargo test --all-targets && cargo test --doc
+        run: cargo test --locked --all-targets && cargo test --locked --doc
       - name: Docs
         run: cargo doc --no-deps
         env:
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --lib
+      - run: cargo check --locked --lib
 
   js:
     name: JS unit tests (parse.js)
@@ -71,14 +71,20 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Same pin as the rust job: one toolchain, one cache.
+      - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - name: Build fixture and demo apps
-        run: cargo build --example e2e_fixture --example pixi_demo
+        run: cargo build --locked --example e2e_fixture --example pixi_demo
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Install Playwright Chromium
         run: npm ci && npx playwright install --with-deps chromium
       - name: E2E (init.js strict line coverage >= 95 %)
