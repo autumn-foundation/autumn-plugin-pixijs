@@ -368,3 +368,27 @@ test("exported tables are frozen", () => {
     assert.ok(Object.isFrozen(table));
   }
 });
+
+test("long numbers do not stop the page", () => {
+  // A backtracking regex takes seconds for this input.
+  const start = performance.now();
+  assert.equal(parseNumber("1".repeat(100_000) + "x", 7), 7);
+  assert.equal(parseNumber("1".repeat(100_000), 7), 7, "too long");
+  assert.deepEqual(parseShapeArgs("polygon", `${"1".repeat(50_000)},`.repeat(20)), [...SHAPES.polygon]);
+  assert.ok(performance.now() - start < 200, `took ${performance.now() - start} ms`);
+  assert.equal(parseNumber("1".repeat(LIMITS.maxNumber), 7), Number("1".repeat(LIMITS.maxNumber)));
+  assert.equal(parseNumber("1".repeat(LIMITS.maxNumber + 1), 7), 7);
+});
+
+test("a stage keeps at most maxObjects objects and warns", () => {
+  const children = Array.from({ length: LIMITS.maxObjects + 5 }, () => el({ [ATTR.shape]: "rect" }));
+  const config = readStage(el({}, children), BASE);
+  assert.equal(config.objects.length, LIMITS.maxObjects);
+  assert.equal(config.warnings.length, 1);
+  assert.match(config.warnings[0], /5 more/);
+});
+
+test("the first kind attribute wins when a child has two", () => {
+  const [object] = readStage(el({}, [el({ [ATTR.shape]: "rect", [ATTR.sprite]: "/a.png" })]), BASE).objects;
+  assert.equal(object.type, "sprite");
+});

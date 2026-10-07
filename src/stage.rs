@@ -12,7 +12,8 @@
 //! logical pixels per second.
 //!
 //! The builder never writes a non-finite number. A setter ignores `NaN` and
-//! infinite input. A setter clamps input that is out of range.
+//! infinite input. Setters clamp sizes to [`MAX_STAGE_SIDE`] and other
+//! values to the ranges in their docs. The runtime applies the same limits.
 
 use autumn_web::{Markup, html};
 use maud::Render;
@@ -21,16 +22,24 @@ use maud::Render;
 pub const DEFAULT_STAGE_SIZE: Vec2 = Vec2::new(800.0, 450.0);
 /// Largest stage side, in logical pixels.
 pub const MAX_STAGE_SIDE: f32 = 8192.0;
-/// Most corners of a polygon. The builder drops the extra corners.
+/// Maximum number of polygon corners. The builder drops the extra corners.
 pub const MAX_POLYGON_POINTS: usize = 512;
-/// Fewest and most corners of a star.
+/// Minimum and maximum number of star points.
 const STAR_POINTS: (u32, u32) = (3, 100);
 /// Smallest and largest font size, in logical pixels.
 const FONT_SIZE: (f32, f32) = (1.0, 512.0);
 /// Smallest and largest animation speed, in frames per second.
 const FPS: (f32, f32) = (1.0, 120.0);
-/// The polygon for fewer than three valid corners: a triangle.
-const DEFAULT_POLYGON: &str = "0,-50,50,50,-50,50";
+/// Default sizes per shape kind, in `data-pixi-args` order. `parse.js`
+/// has the same table (a test checks it).
+const SHAPE_DEFAULTS: [(&str, &[f32]); 6] = [
+    ("rect", &[100.0, 100.0]),
+    ("rounded-rect", &[100.0, 100.0, 12.0]),
+    ("circle", &[50.0]),
+    ("ellipse", &[60.0, 40.0]),
+    ("star", &[5.0, 50.0, 25.0]),
+    ("polygon", &[0.0, -50.0, 50.0, 50.0, -50.0, 50.0]),
+];
 
 /// Returns `Some(value)` when it is finite, else `None`.
 const fn finite(value: f32) -> Option<f32> {
@@ -38,8 +47,11 @@ const fn finite(value: f32) -> Option<f32> {
 }
 
 /// Returns `Some(value)` when it is finite and above zero, else `None`.
+/// The value clamps to [`MAX_STAGE_SIDE`].
 fn positive(value: f32) -> Option<f32> {
-    finite(value).filter(|v| *v > 0.0)
+    finite(value)
+        .filter(|v| *v > 0.0)
+        .map(|v| v.min(MAX_STAGE_SIDE))
 }
 
 /// Formats a finite number for an attribute. `-0` becomes `0`.
@@ -107,6 +119,13 @@ impl From<[f32; 2]> for Vec2 {
 impl From<(f32, f32)> for Vec2 {
     fn from((x, y): (f32, f32)) -> Self {
         Self::new(x, y)
+    }
+}
+
+impl From<f32> for Vec2 {
+    /// One value for both components, for example a uniform scale.
+    fn from(value: f32) -> Self {
+        Self::splat(value)
     }
 }
 
@@ -178,10 +197,11 @@ impl Renderer {
 }
 
 /// Text alignment of a multi-line [`Text`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum Align {
     /// Left (`left`). The default.
+    #[default]
     Left,
     /// Center (`center`).
     Center,
@@ -200,11 +220,17 @@ impl Align {
     }
 }
 
-/// An htmx request that a tap sends.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The htmx verb of a tap request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verb {
+    Get,
+    Post,
+}
+
+/// An htmx request that a tap sends. Without a verb, the options do nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct TapRequest {
-    get: Option<String>,
-    post: Option<String>,
+    verb: Option<(Verb, String)>,
     target: Option<String>,
     swap: Option<String>,
     vals: Option<String>,
@@ -229,13 +255,20 @@ struct Common {
 impl Common {
     /// The htmx request, made on first use.
     fn request(&mut self) -> &mut TapRequest {
-        self.request.get_or_insert(TapRequest {
-            get: None,
-            post: None,
-            target: None,
-            swap: None,
-            vals: None,
-        })
+        self.request.get_or_insert_with(TapRequest::default)
+    }
+
+    /// The request when it has a verb.
+    fn sent_request(&self) -> Option<&TapRequest> {
+        self.request.as_ref().filter(|r| r.verb.is_some())
+    }
+
+    /// The URL of the request when its verb is `verb`.
+    fn url(&self, verb: Verb) -> Option<&str> {
+        self.sent_request()
+            .and_then(|r| r.verb.as_ref())
+            .filter(|(v, _)| *v == verb)
+            .map(|(_, url)| url.as_str())
     }
 }
 
@@ -250,8 +283,8 @@ macro_rules! common_setters {
             self
         }
 
-        /// Sets the accessible name. Tappable objects get a focusable
-        /// button with this name.
+        /// Sets the accessible name of a tappable object: the label of its
+        /// focusable button. Default: the `id`. Other objects ignore it.
         pub fn label(mut self, label: impl Into<String>) -> Self {
             self.common.label = Some(label.into());
             self
@@ -319,42 +352,49 @@ macro_rules! common_setters {
 
         /// Makes the object tappable. A tap (click, touch, or Enter on the
         /// focused accessible button) sends a bubbling `pixi:tap` event from
-        /// the declaration element.
+        /// the declaration element. Keyboard access needs the WebGL renderer.
         pub const fn tappable(mut self) -> Self {
             self.common.tap = true;
             self
         }
 
         /// Sends an htmx `GET` to `url` on each tap. Needs htmx on the page.
-        /// The object becomes tappable.
+        /// The object becomes tappable. It replaces an earlier
+        /// [`tap_post`](Self::tap_post).
         pub fn tap_get(mut self, url: impl Into<String>) -> Self {
             self.common.tap = true;
-            self.common.request().get = Some(url.into());
+            self.common.request().verb = Some((Verb::Get, url.into()));
             self
         }
 
         /// Sends an htmx `POST` to `url` on each tap. Needs htmx on the
-        /// page. The object becomes tappable.
+        /// page. The object becomes tappable. It replaces an earlier
+        /// [`tap_get`](Self::tap_get). With CSRF on, the page needs the
+        /// Autumn htmx CSRF helper (see the README).
         pub fn tap_post(mut self, url: impl Into<String>) -> Self {
             self.common.tap = true;
-            self.common.request().post = Some(url.into());
+            self.common.request().verb = Some((Verb::Post, url.into()));
             self
         }
 
-        /// Sets the htmx target (`hx-target`) of the tap request.
+        /// Sets the htmx target (`hx-target`) of the tap request. It needs
+        /// [`tap_get`](Self::tap_get) or [`tap_post`](Self::tap_post).
         pub fn tap_target(mut self, selector: impl Into<String>) -> Self {
             self.common.request().target = Some(selector.into());
             self
         }
 
-        /// Sets the htmx swap strategy (`hx-swap`) of the tap request.
+        /// Sets the htmx swap strategy (`hx-swap`) of the tap request. It
+        /// needs [`tap_get`](Self::tap_get) or [`tap_post`](Self::tap_post).
         pub fn tap_swap(mut self, swap: impl Into<String>) -> Self {
             self.common.request().swap = Some(swap.into());
             self
         }
 
         /// Sets the htmx values (`hx-vals`, a JSON object) of the tap
-        /// request. Do not use the `js:` prefix: the default CSP blocks it.
+        /// request. It needs [`tap_get`](Self::tap_get) or
+        /// [`tap_post`](Self::tap_post). Do not use the `js:` prefix: the
+        /// default CSP blocks it.
         pub fn tap_vals(mut self, json: impl Into<String>) -> Self {
             self.common.request().vals = Some(json.into());
             self
@@ -387,8 +427,7 @@ struct Decl<'a> {
 
 /// Renders one hidden declaration element.
 fn declaration(d: &Decl<'_>, c: &Common) -> Markup {
-    let r = c.request.as_ref();
-    let has_request = r.is_some_and(|r| r.get.is_some() || r.post.is_some());
+    let r = c.sent_request();
     html! {
         div hidden id=[c.id.as_deref()]
             data-pixi-sprite=[d.sprite]
@@ -418,9 +457,9 @@ fn declaration(d: &Decl<'_>, c: &Common) -> Markup {
             data-pixi-tint=[c.tint]
             data-pixi-spin=[c.spin.map(num)]
             data-pixi-tap=[c.tap.then_some("true")]
-            hx-get=[r.and_then(|r| r.get.as_deref())]
-            hx-post=[r.and_then(|r| r.post.as_deref())]
-            hx-trigger=[has_request.then_some("pixi:tap")]
+            hx-get=[c.url(Verb::Get)]
+            hx-post=[c.url(Verb::Post)]
+            hx-trigger=[r.map(|_| "pixi:tap")]
             hx-target=[r.and_then(|r| r.target.as_deref())]
             hx-swap=[r.and_then(|r| r.swap.as_deref())]
             hx-vals=[r.and_then(|r| r.vals.as_deref())] {
@@ -440,8 +479,9 @@ fn declaration(d: &Decl<'_>, c: &Common) -> Markup {
 /// # let _ = coin;
 /// ```
 ///
-/// The URL must be `http(s)` or relative. The app CSP must allow it in
-/// `connect-src` and `img-src`. The default CSP allows same-origin URLs.
+/// The URL must be `http(s)` or relative. Its path must end with `.png`,
+/// `.jpg`, `.jpeg`, `.webp`, `.avif`, or `.svg`. The app CSP must allow it
+/// in `connect-src` and `img-src`. The default CSP allows same-origin URLs.
 #[derive(Debug, Clone, PartialEq)]
 #[must_use]
 pub struct Sprite {
@@ -451,8 +491,7 @@ pub struct Sprite {
 }
 
 impl Sprite {
-    /// Makes a sprite from an image URL (PNG, JPEG, WebP, AVIF, GIF, or
-    /// SVG).
+    /// Makes a sprite from an image URL (PNG, JPEG, WebP, AVIF, or SVG).
     pub fn new(src: impl Into<String>) -> Self {
         Self {
             src: src.into(),
@@ -463,6 +502,7 @@ impl Sprite {
 
     /// Sets the width and height in logical pixels. Default: the image
     /// size. The method ignores sizes that are not finite and positive.
+    /// Sizes clamp to [`MAX_STAGE_SIDE`].
     pub fn size(mut self, width: f32, height: f32) -> Self {
         if let (Some(w), Some(h)) = (positive(width), positive(height)) {
             self.size = Some(Vec2::new(w, h));
@@ -502,8 +542,9 @@ pub struct TilingSprite {
 }
 
 impl TilingSprite {
-    /// Makes a tiling sprite of `width × height` logical pixels. The runtime
-    /// uses the stage size for a size that is not finite and positive.
+    /// Makes a tiling sprite of `width × height` logical pixels from an
+    /// image URL (see [`Sprite`]). The runtime uses the stage size for a size
+    /// that is not finite and positive. Sizes clamp to [`MAX_STAGE_SIDE`].
     pub fn new(src: impl Into<String>, width: f32, height: f32) -> Self {
         let size = match (positive(width), positive(height)) {
             (Some(w), Some(h)) => Some(Vec2::new(w, h)),
@@ -560,8 +601,9 @@ pub struct AnimatedSprite {
 }
 
 impl AnimatedSprite {
-    /// Makes an animated sprite from a sprite sheet URL. Default: the first
-    /// animation of the sheet at 12 frames per second.
+    /// Makes an animated sprite from a sprite sheet URL. The URL path must
+    /// end with `.json`, and the sheet must have an `animations` table.
+    /// Default: the first animation of the sheet at 12 frames per second.
     pub fn new(src: impl Into<String>) -> Self {
         Self {
             src: src.into(),
@@ -572,7 +614,8 @@ impl AnimatedSprite {
     }
 
     /// Selects an animation of the sheet by name. The method trims the
-    /// name. It ignores an empty name.
+    /// name. It ignores an empty name. For an unknown name, the runtime
+    /// logs a warning and plays the first animation.
     pub fn animation(mut self, name: impl Into<String>) -> Self {
         let name = name.into();
         let name = name.trim();
@@ -628,7 +671,8 @@ pub struct Text {
 }
 
 impl Text {
-    /// Makes a text object. Default style: 24 px `sans-serif`, black.
+    /// Makes a text object. Default style: 24 px `sans-serif`, black. The
+    /// runtime trims the text and keeps at most 10000 characters.
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             content: text.into(),
@@ -650,7 +694,8 @@ impl Text {
         self
     }
 
-    /// Sets the CSS font family, for example `"Georgia, serif"`.
+    /// Sets the CSS font family, for example `"Georgia, serif"`. The runtime
+    /// trims it and keeps at most 200 characters.
     pub fn font_family(mut self, family: impl Into<String>) -> Self {
         self.font_family = Some(family.into());
         self
@@ -762,40 +807,42 @@ impl Geometry {
         }
     }
 
-    /// The `data-pixi-args` value. Bad sizes become the defaults.
+    /// The `data-pixi-args` value. A size that is negative or not finite
+    /// becomes the default. Sizes clamp to [`MAX_STAGE_SIDE`].
     fn args(&self) -> String {
-        /// A size that is finite and not negative, else `default`.
-        fn size(value: f32, default: f32) -> String {
-            num(finite(value).filter(|v| *v >= 0.0).unwrap_or(default))
-        }
-        match self {
-            Self::Rect { width, height } => {
-                format!("{},{}", size(*width, 100.0), size(*height, 100.0))
-            }
+        let defaults = SHAPE_DEFAULTS
+            .iter()
+            .find(|(kind, _)| *kind == self.kind())
+            .map_or(&[][..], |(_, defaults)| *defaults);
+        let sizes = |values: &[f32], defaults: &[f32]| -> Vec<String> {
+            values
+                .iter()
+                .zip(defaults)
+                .map(|(v, d)| {
+                    num(finite(*v)
+                        .filter(|v| *v >= 0.0)
+                        .map_or(*d, |v| v.min(MAX_STAGE_SIDE)))
+                })
+                .collect()
+        };
+        let list = match self {
+            Self::Rect { width, height } => sizes(&[*width, *height], defaults),
             Self::RoundedRect {
                 width,
                 height,
                 radius,
-            } => format!(
-                "{},{},{}",
-                size(*width, 100.0),
-                size(*height, 100.0),
-                size(*radius, 12.0)
-            ),
-            Self::Circle { radius } => size(*radius, 50.0),
-            Self::Ellipse { radius_x, radius_y } => {
-                format!("{},{}", size(*radius_x, 60.0), size(*radius_y, 40.0))
-            }
+            } => sizes(&[*width, *height, *radius], defaults),
+            Self::Circle { radius } => sizes(&[*radius], defaults),
+            Self::Ellipse { radius_x, radius_y } => sizes(&[*radius_x, *radius_y], defaults),
             Self::Star {
                 points,
                 outer,
                 inner,
-            } => format!(
-                "{},{},{}",
-                (*points).clamp(STAR_POINTS.0, STAR_POINTS.1),
-                size(*outer, 50.0),
-                size(*inner, 25.0)
-            ),
+            } => {
+                let mut list = vec![(*points).clamp(STAR_POINTS.0, STAR_POINTS.1).to_string()];
+                list.extend(sizes(&[*outer, *inner], &defaults[1..]));
+                list
+            }
             Self::Polygon(points) => {
                 let corners: Vec<String> = points
                     .iter()
@@ -804,12 +851,13 @@ impl Geometry {
                     .map(Vec2::attr)
                     .collect();
                 if corners.len() < 3 {
-                    DEFAULT_POLYGON.to_owned()
+                    defaults.iter().map(|d| num(*d)).collect()
                 } else {
-                    corners.join(",")
+                    corners
                 }
             }
-        }
+        };
+        list.join(",")
     }
 }
 
@@ -843,7 +891,12 @@ impl Fill {
 /// # let _ = card;
 /// ```
 ///
-/// The shape centers on its position. [`Shape::anchor`] moves this point.
+/// The shape centers on its position. [`Shape::anchor`] moves this point
+/// within the shape bounds, stroke included. A polygon is different: its
+/// corners are relative to the position, and the anchor does not apply.
+///
+/// A size that is negative or not finite becomes the default of its kind
+/// (see the README). A zero size stays zero.
 #[derive(Debug, Clone, PartialEq)]
 #[must_use]
 pub struct Shape {
@@ -919,7 +972,8 @@ impl Shape {
     }
 
     /// Adds a stroke of `width` logical pixels. A width that is not finite
-    /// and positive uses the default (`2`).
+    /// and positive uses the default (`2`). The width clamps to
+    /// [`MAX_STAGE_SIDE`].
     pub fn stroke(mut self, color: Color, width: f32) -> Self {
         self.stroke = Some((color, positive(width)));
         self
@@ -971,6 +1025,19 @@ macro_rules! stage_object_from {
 }
 
 stage_object_from!(Sprite, TilingSprite, AnimatedSprite, Text, Shape);
+
+impl StageObject {
+    /// True when the object is tappable.
+    const fn tappable(&self) -> bool {
+        match self {
+            Self::Sprite(o) => o.common.tap,
+            Self::TilingSprite(o) => o.common.tap,
+            Self::AnimatedSprite(o) => o.common.tap,
+            Self::Text(o) => o.common.tap,
+            Self::Shape(o) => o.common.tap,
+        }
+    }
+}
 
 impl Render for StageObject {
     fn render(&self) -> Markup {
@@ -1035,16 +1102,17 @@ impl Stage {
         self
     }
 
-    /// Sets an accessible label. The element gets `role="img"` and
-    /// `aria-label`.
+    /// Sets an accessible label. The element gets `aria-label` and
+    /// `role="img"`. A stage with tappable objects gets `role="group"`
+    /// instead, so that screen readers keep its buttons.
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
         self
     }
 
-    /// Sets the logical size. Default: `800 × 450`. The runtime scales the
-    /// stage to the element width and sets the element aspect ratio to
-    /// `width / height`. Sides clamp to `1`–[`MAX_STAGE_SIDE`]. The method
+    /// Sets the logical size. Default: `800 × 450`. The runtime sets the
+    /// element aspect ratio to `width / height` (clamped to `1/10`–`10`). It
+    /// fits the stage in the element and centers it. Sides clamp to `1`–[`MAX_STAGE_SIDE`]. The method
     /// ignores sizes that are not finite and positive.
     pub fn size(mut self, width: f32, height: f32) -> Self {
         if let (Some(w), Some(h)) = (positive(width), positive(height)) {
@@ -1085,6 +1153,12 @@ impl Stage {
         self
     }
 
+    /// Adds display objects in order. Later objects draw on top.
+    pub fn extend<O: Into<StageObject>>(mut self, objects: impl IntoIterator<Item = O>) -> Self {
+        self.objects.extend(objects.into_iter().map(Into::into));
+        self
+    }
+
     /// Sets fallback content. It shows without JavaScript, without a
     /// renderer, and when an image fails to load.
     pub fn fallback(mut self, markup: Markup) -> Self {
@@ -1095,8 +1169,10 @@ impl Stage {
 
 impl Render for Stage {
     fn render(&self) -> Markup {
+        let tappable = self.objects.iter().any(StageObject::tappable);
+        let role = if tappable { "group" } else { "img" };
         html! {
-            div role=[self.label.as_ref().map(|_| "img")]
+            div role=[self.label.as_ref().map(|_| role)]
                 aria-label=[self.label.as_deref()]
                 id=[self.id.as_deref()]
                 class=[self.class.as_deref()]
@@ -1172,6 +1248,116 @@ mod tests {
     }
 
     #[test]
+    fn a_stage_with_tappable_objects_is_a_labeled_group() {
+        // PixiJS puts its accessible buttons inside the stage. The children
+        // of `role="img"` are presentational, so a tappable stage is a group.
+        let html = render(
+            &Stage::new()
+                .label("Game")
+                .add(Shape::circle(1.0).tappable()),
+        );
+        assert!(
+            html.starts_with(r#"<div role="group" aria-label="Game""#),
+            "{html}"
+        );
+        let html = render(&Stage::new().label("Art").add(Shape::circle(1.0)));
+        assert!(
+            html.starts_with(r#"<div role="img" aria-label="Art""#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn the_last_tap_verb_wins_and_options_need_a_verb() {
+        let html = render(&Shape::circle(1.0).tap_get("/a").tap_post("/b"));
+        assert!(html.contains(r#"hx-post="/b""#), "{html}");
+        assert!(!html.contains("hx-get"), "{html}");
+        let html = render(&Shape::circle(1.0).tap_post("/b").tap_get("/a"));
+        assert!(html.contains(r#"hx-get="/a""#), "{html}");
+        assert!(!html.contains("hx-post"), "{html}");
+        let html = render(
+            &Shape::circle(1.0)
+                .tap_target("#x")
+                .tap_swap("outerHTML")
+                .tap_vals("{}"),
+        );
+        assert!(!html.contains("hx-"), "{html}");
+        assert!(!html.contains("data-pixi-tap"), "{html}");
+    }
+
+    #[test]
+    fn sizes_clamp_to_the_largest_stage_side() {
+        let big = 1e9;
+        let sprite = render(&Sprite::new("/a.png").size(big, 1.0));
+        assert!(sprite.contains(r#"data-pixi-size="8192,1""#), "{sprite}");
+        let tiling = render(&TilingSprite::new("/a.png", big, 2.0));
+        assert!(tiling.contains(r#"data-pixi-size="8192,2""#), "{tiling}");
+        let stroke = render(&Shape::circle(1.0).stroke(Color::BLACK, big));
+        assert!(
+            stroke.contains(r#"data-pixi-stroke-width="8192""#),
+            "{stroke}"
+        );
+        assert_eq!(Shape::rect(big, 1.0).geometry.args(), "8192,1");
+        assert_eq!(Shape::star(5, big, big).geometry.args(), "5,8192,8192");
+    }
+
+    /// Defaults that the README and rustdoc name. `parse.js` must agree.
+    const DOCUMENTED_DEFAULTS: [&str; 4] = [
+        "fontSize: 24",
+        "strokeWidth: 2",
+        "fps: 12",
+        "maxText: 10000",
+    ];
+
+    #[test]
+    fn limits_and_defaults_match_parse_js() {
+        let parse = include_str!("../assets/parse.js");
+        let mut needles = vec![
+            format!("maxSide: {MAX_STAGE_SIDE}"),
+            format!("maxPolygonPoints: {MAX_POLYGON_POINTS}"),
+            format!(
+                "starPoints: Object.freeze([{}, {}])",
+                STAR_POINTS.0, STAR_POINTS.1
+            ),
+            format!(
+                "fontSize: Object.freeze([{}, {}])",
+                FONT_SIZE.0, FONT_SIZE.1
+            ),
+            format!("fps: Object.freeze([{}, {}])", FPS.0, FPS.1),
+            format!(
+                "size: Object.freeze([{}, {}])",
+                DEFAULT_STAGE_SIZE.x, DEFAULT_STAGE_SIZE.y
+            ),
+        ];
+        needles.extend(DOCUMENTED_DEFAULTS.map(str::to_owned));
+        for (kind, defaults) in SHAPE_DEFAULTS {
+            let list: Vec<String> = defaults.iter().map(|d| num(*d)).collect();
+            needles.push(format!(r#""{kind}": Object.freeze([{}])"#, list.join(", ")));
+        }
+        for needle in needles {
+            assert!(parse.contains(&needle), "parse.js has {needle}");
+        }
+        let kinds: Vec<&str> = all_geometries().iter().map(Geometry::kind).collect();
+        assert_eq!(kinds, SHAPE_DEFAULTS.map(|(kind, _)| kind));
+    }
+
+    #[test]
+    fn number_grammar_matches_parse_js() {
+        // `js_number` copies this regex. Keep both in sync.
+        let parse = include_str!("../assets/parse.js");
+        assert!(parse.contains(r"const NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;"));
+    }
+
+    #[test]
+    fn small_conveniences_work() {
+        assert_eq!(Vec2::from(2.0), Vec2::splat(2.0));
+        assert_eq!(Align::default(), Align::Left);
+        let one = Stage::new().add(Shape::circle(1.0)).add(Text::new("a"));
+        let both: Vec<StageObject> = vec![Shape::circle(1.0).into(), Text::new("a").into()];
+        assert_eq!(render(&Stage::new().extend(both)), render(&one));
+    }
+
+    #[test]
     fn empty_stage_is_one_bare_element() {
         assert_eq!(render(&Stage::new()), r#"<div data-pixi="stage"></div>"#);
     }
@@ -1181,7 +1367,7 @@ mod tests {
         let html = render(&full_stage());
         let open = &html[..html.find('>').expect("tag")];
         for attr in [
-            r#"role="img""#,
+            r#"role="group""#,
             r#"aria-label="A game""#,
             r#"id="game""#,
             r#"class="wide""#,
@@ -1538,7 +1724,7 @@ mod tests {
     }
 
     /// True when `token` matches the parse.js `NUMBER` grammar:
-    /// `^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$` (any case).
+    /// `^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$` (any case).
     fn js_number(token: &str) -> bool {
         let body = token.strip_prefix(['+', '-']).unwrap_or(token);
         let (mantissa, exponent) = match body.split_once(['e', 'E']) {

@@ -54,6 +54,8 @@ export const LIMITS = Object.freeze({
   fps: Object.freeze([1, 120]),
   maxText: 10000,
   maxFontFamily: 200,
+  maxNumber: 64,
+  maxObjects: 1000,
 });
 
 /** Default sizes per shape, in `data-pixi-args` order. */
@@ -96,15 +98,16 @@ export const SHAPE_DEFAULTS = Object.freeze({ fill: 0xffffff, strokeWidth: 2 });
 /** Animated sprite defaults. */
 export const SHEET_DEFAULTS = Object.freeze({ fps: 12 });
 
-const NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+// No nested quantifiers on one digit run: the test is linear in the input.
+const NUMBER = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
 const HEX6 = /^#([0-9a-f]{6})$/i;
 const HEX3 = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i;
 
-/** Parses a finite decimal number, clamped to `[min, max]`. */
+/** Parses a finite decimal number, clamped to `[min, max]`. Text longer than `LIMITS.maxNumber` is bad input. */
 export function parseNumber(value, fallback, min = -Infinity, max = Infinity) {
   if (typeof value !== "string") return fallback;
   const text = value.trim();
-  if (!NUMBER.test(text)) return fallback;
+  if (text.length > LIMITS.maxNumber || !NUMBER.test(text)) return fallback;
   const n = Number(text);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, n));
@@ -288,15 +291,21 @@ const KINDS = [
  * Reads a stage element into a plain config object.
  *
  * `el` needs `getAttribute` and `children`. Each child needs
- * `getAttribute`, `hasAttribute`, and `textContent`. Bad declarations are
- * skipped and named in `warnings`.
+ * `getAttribute`, `hasAttribute`, and `textContent`. readStage reads only
+ * the direct children. It skips a bad declaration and names it in
+ * `warnings`. It keeps at most `LIMITS.maxObjects` objects.
  */
 export function readStage(el, base) {
   const warnings = [];
   const objects = [];
+  let extra = 0;
   for (const child of el.children ?? []) {
     const kind = KINDS.find(([attr]) => child.hasAttribute(attr));
     if (!kind) continue;
+    if (objects.length >= LIMITS.maxObjects) {
+      extra += 1;
+      continue;
+    }
     const [attr, read] = kind;
     const object = read(child, base);
     if (object) {
@@ -305,6 +314,7 @@ export function readStage(el, base) {
       warnings.push(`ignored ${attr}="${child.getAttribute(attr)}"`);
     }
   }
+  if (extra > 0) warnings.push(`ignored ${extra} more objects (limit ${LIMITS.maxObjects})`);
   return {
     size: parseSize(el.getAttribute(ATTR.size), [...STAGE_DEFAULTS.size], 1),
     background: parseColor(el.getAttribute(ATTR.background), null),
