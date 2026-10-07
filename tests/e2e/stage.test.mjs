@@ -205,7 +205,7 @@ describe("kinds", () => {
     assert.deepEqual(info.sprite, [20, 10, 1, 0]);
     assert.deepEqual(info.tiling, [400, 200], "a bad size uses the stage size");
     assert.deepEqual(info.text, [30, "monospace", 0x123456, "bold", "center", 120]);
-    assert.ok(info.star >= 80 && info.star <= 90, `star with stroke: ${info.star}`);
+    assert.ok(info.star >= 80 && info.star <= 86, `star with stroke: ${info.star}`);
   });
 });
 
@@ -291,24 +291,24 @@ describe("motion", () => {
     await page.waitForFunction(() => window.__ticks > 2);
   });
 
-  test("requestRender() draws custom changes", async () => {
+  test("requestRender() renders one frame per animation frame", async () => {
     const page = await app.open("/still");
     await waitState(page, "stage", "ready");
+    await sleep(100);
     await page.evaluate(() => {
+      const { app } = document.getElementById("stage").autumnPixi;
+      const render = app.render.bind(app);
+      window.__renders = 0;
+      app.render = (...args) => {
+        window.__renders += 1;
+        return render(...args);
+      };
       const h = document.getElementById("stage").autumnPixi;
-      h.objects[0].tint = 0x00ff00;
       h.requestRender();
       h.requestRender(); // A second request in the same frame is a no-op.
     });
-    await sleep(100);
-    const [r, g] = await page.evaluate(() => {
-      const { app } = document.getElementById("stage").autumnPixi;
-      const gl = app.renderer.gl;
-      const out = new Uint8Array(4);
-      gl.readPixels(app.canvas.width / 2, app.canvas.height / 2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, out);
-      return [...out];
-    });
-    assert.ok(g > 200 && r < 50, `tinted green: ${[r, g]}`);
+    await sleep(200);
+    assert.equal(await page.evaluate(() => window.__renders), 1);
   });
 });
 
@@ -396,6 +396,19 @@ describe("assets", () => {
     assert.match(await page.evaluate(() => window.__warnings.join("\n")), /nope/);
     assert.equal(await read(page, "stage", (h) => h.root.getChildByLabel("sheet").totalFrames), 2);
   });
+
+  for (const [kind, message] of [
+    ["sprite", /not an image/],
+    ["sheet", /not a sprite sheet/],
+    ["empty", /no animations/],
+  ]) {
+    test(`an asset of the wrong type fails the stage (${kind})`, async () => {
+      const page = await app.open(`/wrong-type/${kind}`);
+      await waitState(page, "stage", "error");
+      assert.equal(await page.locator(".fallback").isVisible(), true);
+      assert.match(await page.evaluate(() => window.__warnings.join("\n")), message);
+    });
+  }
 
   test("a failed image is loaded again by the next build", async () => {
     const page = await app.open("/basic");
@@ -602,16 +615,23 @@ describe("changes", () => {
     await page.evaluate(() => document.getElementById("stage").setAttribute("data-pixi-size", "400,400"));
     await page.waitForFunction(() => window.__events.length === 5);
     assert.deepEqual(await read(page, "stage", (h) => h.size), [400, 400]);
-    // Changes that do not affect the stage do not rebuild it.
+    // Of these changes, only the new text of #score rebuilds the stage.
     await page.evaluate(() => {
       const el = document.getElementById("stage");
       el.setAttribute("class", "x");
       el.insertAdjacentHTML("beforeend", "<p>note</p>");
       el.lastElementChild.textContent = "changed";
       document.getElementById("score").setAttribute("title", "x");
+      el.setAttribute("data-pixi-label", "not a stage attribute");
+      document.getElementById("score").innerHTML = "Score: 20<span>!</span>";
+    });
+    await page.waitForFunction(() => window.__events.length === 6);
+    // An attribute inside a declaration does not rebuild the stage.
+    await page.evaluate(() => {
+      document.querySelector("#score span").setAttribute("data-pixi-fill", "#00ff00");
     });
     await sleep(200);
-    assert.equal(await count(), 5);
+    assert.equal(await count(), 6, "only the text change rebuilds");
   });
 
   test("a failed stage stays failed when other content swaps in", async () => {

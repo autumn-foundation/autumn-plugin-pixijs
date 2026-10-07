@@ -1,0 +1,31 @@
+{
+  "frames": {
+    "frames-0": {
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 64
+      },
+      "sourceSize": {
+        "w": 64,
+        "h": 64
+      },
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 64,
+        "h": 64
+      }
+    }
+  },
+  "meta": {
+    "image": "frames.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 64,
+      "h": 64
+    },
+    "scale": "1"
+  }
+}

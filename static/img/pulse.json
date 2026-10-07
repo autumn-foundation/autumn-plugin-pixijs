@@ -109,6 +109,15 @@
       }
     }
   },
+  "meta": {
+    "image": "pulse.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 384,
+      "h": 64
+    },
+    "scale": "1"
+  },
   "animations": {
     "pulse": [
       "pulse-0",
@@ -118,14 +127,5 @@
       "pulse-4",
       "pulse-5"
     ]
-  },
-  "meta": {
-    "image": "pulse.png",
-    "format": "RGBA8888",
-    "size": {
-      "w": 384,
-      "h": 64
-    },
-    "scale": "1"
   }
 }

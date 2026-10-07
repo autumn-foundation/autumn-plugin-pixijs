@@ -1,1 +1,40 @@
 /* autumn-plugin-pixijs default styles. */
+
+/* A stage has a size before JavaScript runs. Default: 16 / 9. The runtime
+   sets the aspect ratio of the logical stage size. */
+[data-pixi="stage"] {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+}
+
+/* The canvas fills the stage. */
+[data-pixi="stage"] > canvas[data-pixi-canvas] {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Declarations are data, not content. */
+[data-pixi-sprite],
+[data-pixi-tiling],
+[data-pixi-sheet],
+[data-pixi-text],
+[data-pixi-shape] {
+  display: none !important;
+}
+
+/* The fallback fills the stage. It hides while the stage loads or runs. */
+[data-pixi="stage"] > [data-pixi-fallback] {
+  position: absolute;
+  inset: 0;
+}
+
+[data-pixi-state="loading"] > [data-pixi-fallback],
+[data-pixi-state="ready"] > [data-pixi-fallback] {
+  display: none;
+}

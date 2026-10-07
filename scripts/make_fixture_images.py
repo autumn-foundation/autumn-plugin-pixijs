@@ -36,7 +36,7 @@ def png(path, width, height, pixel):
     path.write_bytes(data)
 
 
-def sheet(name, frame_size, colors_or_painters, animation):
+def sheet(name, frame_size, colors_or_painters, animation, with_animations=True):
     """Writes `name.png` and `name.json` (a PixiJS sprite sheet, one row)."""
     count = len(colors_or_painters)
     width = frame_size * count
@@ -57,9 +57,10 @@ def sheet(name, frame_size, colors_or_painters, animation):
     }
     doc = {
         "frames": frames,
-        "animations": {animation: list(frames)},
         "meta": {"image": f"{name}.png", "format": "RGBA8888", "size": {"w": width, "h": frame_size}, "scale": "1"},
     }
+    if with_animations:
+        doc["animations"] = {animation: list(frames)}
     (OUT / f"{name}.json").write_text(json.dumps(doc, indent=2) + "\n")
 
 
@@ -80,6 +81,7 @@ def main():
     png(OUT / "red.png", 64, 64, lambda x, y: (255, 0, 0, 255))
     png(OUT / "checker.png", 32, 32, lambda x, y: (0, 255, 0, 255) if (x < 16) == (y < 16) else (0, 0, 255, 255))
     sheet("blink", 64, [(255, 0, 0, 255), (0, 255, 0, 255)], "blink")
+    sheet("frames", 64, [(255, 0, 0, 255)], "frames", with_animations=False)
     (OUT / "broken.png").write_bytes(b"\x89PNG\r\n\x1a\nnot really a png")
     (OUT / "dot.svg").write_text(
         '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">'

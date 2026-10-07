@@ -50,6 +50,7 @@ async fn main() {
             text,
             params,
             late_script,
+            wrong_type,
         ])
         .run()
         .await;
@@ -340,4 +341,15 @@ async fn late_script() -> Markup {
             }
         }
     }
+}
+
+/// Assets of the wrong type. The path selects the case.
+#[autumn_web::get("/wrong-type/{kind}")]
+async fn wrong_type(kind: autumn_web::extract::Path<String>) -> Markup {
+    let object: autumn_plugin_pixijs::StageObject = match kind.0.as_str() {
+        "sprite" => Sprite::new("/static/img/blink.json").into(),
+        "sheet" => AnimatedSprite::new("/static/img/red.png").into(),
+        _ => AnimatedSprite::new("/static/img/frames.json").into(),
+    };
+    page(&html! { (Stage::new().id("stage").add(object).fallback(fallback())) })
 }

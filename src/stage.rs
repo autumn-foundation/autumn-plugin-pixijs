@@ -520,7 +520,7 @@ impl TilingSprite {
     /// Moves the image inside the rectangle, in logical pixels per second.
     /// The scroll stops when the user prefers reduced motion, unless the
     /// stage calls [`Stage::animate_reduced_motion`].
-    pub fn scroll(mut self, x: f32, y: f32) -> Self {
+    pub const fn scroll(mut self, x: f32, y: f32) -> Self {
         if let Some(v) = Vec2::new(x, y).finite() {
             self.scroll = Some(v);
         }
@@ -617,7 +617,7 @@ impl Render for AnimatedSprite {
 #[derive(Debug, Clone, PartialEq)]
 #[must_use]
 pub struct Text {
-    text: String,
+    content: String,
     font_size: Option<f32>,
     font_family: Option<String>,
     fill: Option<Color>,
@@ -631,7 +631,7 @@ impl Text {
     /// Makes a text object. Default style: 24 px `sans-serif`, black.
     pub fn new(text: impl Into<String>) -> Self {
         Self {
-            text: text.into(),
+            content: text.into(),
             font_size: None,
             font_family: None,
             fill: None,
@@ -689,7 +689,7 @@ impl Text {
 impl Render for Text {
     fn render(&self) -> Markup {
         let decl = Decl {
-            text: Some(&self.text),
+            text: Some(&self.content),
             font_size: self.font_size,
             font_family: self.font_family.as_deref(),
             fill: self.fill.map(|c| c.to_string()),
@@ -813,6 +813,25 @@ impl Geometry {
     }
 }
 
+/// The fill of a [`Shape`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fill {
+    /// A solid color.
+    Color(Color),
+    /// No fill (`none`).
+    None,
+}
+
+impl Fill {
+    /// The `data-pixi-fill` value.
+    fn attr(self) -> String {
+        match self {
+            Self::Color(color) => color.to_string(),
+            Self::None => "none".to_owned(),
+        }
+    }
+}
+
 /// A vector shape with a fill and an optional stroke.
 ///
 /// ```rust
@@ -829,7 +848,7 @@ impl Geometry {
 #[must_use]
 pub struct Shape {
     geometry: Geometry,
-    fill: Option<Option<Color>>,
+    fill: Option<Fill>,
     stroke: Option<(Color, Option<f32>)>,
     common: Common,
 }
@@ -889,13 +908,13 @@ impl Shape {
 
     /// Sets the fill color. Default: white.
     pub const fn fill(mut self, color: Color) -> Self {
-        self.fill = Some(Some(color));
+        self.fill = Some(Fill::Color(color));
         self
     }
 
     /// Removes the fill. Use it with [`Shape::stroke`] for an outline.
     pub const fn no_fill(mut self) -> Self {
-        self.fill = Some(None);
+        self.fill = Some(Fill::None);
         self
     }
 
@@ -914,9 +933,7 @@ impl Render for Shape {
         let decl = Decl {
             shape: Some(self.geometry.kind()),
             args: Some(self.geometry.args()),
-            fill: self
-                .fill
-                .map(|fill| fill.map_or_else(|| "none".to_owned(), |c| c.to_string())),
+            fill: self.fill.map(Fill::attr),
             stroke: self.stroke.map(|(color, _)| color),
             stroke_width: self.stroke.and_then(|(_, width)| width),
             ..Decl::default()
@@ -1176,7 +1193,7 @@ mod tests {
         ] {
             assert!(open.contains(attr), "{attr}: {open}");
         }
-        assert!(html.ends_with(r#"<div data-pixi-fallback><p>No canvas.</p></div></div>"#));
+        assert!(html.ends_with(r"<div data-pixi-fallback><p>No canvas.</p></div></div>"));
     }
 
     #[test]
@@ -1331,7 +1348,7 @@ mod tests {
 
     #[test]
     fn polygons_keep_finite_corners_up_to_the_limit() {
-        let many = (0..1000).map(|i| [i as f32, 0.0]);
+        let many = (0..1000_u16).map(|i| [f32::from(i), 0.0]);
         let args = Shape::polygon(many).geometry.args();
         assert_eq!(args.split(',').count(), MAX_POLYGON_POINTS * 2);
         let some = Shape::polygon([[0.0, 0.0], [f32::INFINITY, 0.0], [1.0, 0.0], [1.0, 1.0]]);

@@ -37,12 +37,6 @@
       }
     }
   },
-  "animations": {
-    "blink": [
-      "blink-0",
-      "blink-1"
-    ]
-  },
   "meta": {
     "image": "blink.png",
     "format": "RGBA8888",
@@ -51,5 +45,11 @@
       "h": 64
     },
     "scale": "1"
+  },
+  "animations": {
+    "blink": [
+      "blink-0",
+      "blink-1"
+    ]
   }
 }
