@@ -29,6 +29,8 @@ const STAR_POINTS: (u32, u32) = (3, 100);
 const FONT_SIZE: (f32, f32) = (1.0, 512.0);
 /// Smallest and largest animation speed, in frames per second.
 const FPS: (f32, f32) = (1.0, 120.0);
+/// The polygon for fewer than three valid corners: a triangle.
+const DEFAULT_POLYGON: &str = "0,-50,50,50,-50,50";
 
 /// Returns `Some(value)` when it is finite, else `None`.
 const fn finite(value: f32) -> Option<f32> {
@@ -384,8 +386,49 @@ struct Decl<'a> {
 }
 
 /// Renders one hidden declaration element.
-fn declaration(_decl: &Decl<'_>, _common: &Common) -> Markup {
-    html! {}
+fn declaration(d: &Decl<'_>, c: &Common) -> Markup {
+    let r = c.request.as_ref();
+    let has_request = r.is_some_and(|r| r.get.is_some() || r.post.is_some());
+    html! {
+        div hidden id=[c.id.as_deref()]
+            data-pixi-sprite=[d.sprite]
+            data-pixi-tiling=[d.tiling]
+            data-pixi-sheet=[d.sheet]
+            data-pixi-text=[d.text.map(|_| "")]
+            data-pixi-shape=[d.shape]
+            data-pixi-args=[d.args.as_deref()]
+            data-pixi-size=[d.size.map(Vec2::attr)]
+            data-pixi-scroll=[d.scroll.map(Vec2::attr)]
+            data-pixi-animation=[d.animation]
+            data-pixi-fps=[d.fps.map(num)]
+            data-pixi-fill=[d.fill.as_deref()]
+            data-pixi-stroke=[d.stroke]
+            data-pixi-stroke-width=[d.stroke_width.map(num)]
+            data-pixi-font-size=[d.font_size.map(num)]
+            data-pixi-font-family=[d.font_family]
+            data-pixi-weight=[d.weight]
+            data-pixi-align=[d.align.map(Align::attr)]
+            data-pixi-wrap=[d.wrap.map(num)]
+            data-pixi-label=[c.label.as_deref()]
+            data-pixi-position=[c.position.map(Vec2::attr)]
+            data-pixi-rotation=[c.rotation.map(num)]
+            data-pixi-scale=[c.scale.map(Vec2::attr)]
+            data-pixi-anchor=[c.anchor.map(Vec2::attr)]
+            data-pixi-alpha=[c.alpha.map(num)]
+            data-pixi-tint=[c.tint]
+            data-pixi-spin=[c.spin.map(num)]
+            data-pixi-tap=[c.tap.then_some("true")]
+            hx-get=[r.and_then(|r| r.get.as_deref())]
+            hx-post=[r.and_then(|r| r.post.as_deref())]
+            hx-trigger=[has_request.then_some("pixi:tap")]
+            hx-target=[r.and_then(|r| r.target.as_deref())]
+            hx-swap=[r.and_then(|r| r.swap.as_deref())]
+            hx-vals=[r.and_then(|r| r.vals.as_deref())] {
+            @if let Some(text) = d.text {
+                (text)
+            }
+        }
+    }
 }
 
 /// An image sprite.
@@ -721,7 +764,52 @@ impl Geometry {
 
     /// The `data-pixi-args` value. Bad sizes become the defaults.
     fn args(&self) -> String {
-        String::new()
+        /// A size that is finite and not negative, else `default`.
+        fn size(value: f32, default: f32) -> String {
+            num(finite(value).filter(|v| *v >= 0.0).unwrap_or(default))
+        }
+        match self {
+            Self::Rect { width, height } => {
+                format!("{},{}", size(*width, 100.0), size(*height, 100.0))
+            }
+            Self::RoundedRect {
+                width,
+                height,
+                radius,
+            } => format!(
+                "{},{},{}",
+                size(*width, 100.0),
+                size(*height, 100.0),
+                size(*radius, 12.0)
+            ),
+            Self::Circle { radius } => size(*radius, 50.0),
+            Self::Ellipse { radius_x, radius_y } => {
+                format!("{},{}", size(*radius_x, 60.0), size(*radius_y, 40.0))
+            }
+            Self::Star {
+                points,
+                outer,
+                inner,
+            } => format!(
+                "{},{},{}",
+                (*points).clamp(STAR_POINTS.0, STAR_POINTS.1),
+                size(*outer, 50.0),
+                size(*inner, 25.0)
+            ),
+            Self::Polygon(points) => {
+                let corners: Vec<String> = points
+                    .iter()
+                    .filter_map(|p| p.finite())
+                    .take(MAX_POLYGON_POINTS)
+                    .map(Vec2::attr)
+                    .collect();
+                if corners.len() < 3 {
+                    DEFAULT_POLYGON.to_owned()
+                } else {
+                    corners.join(",")
+                }
+            }
+        }
     }
 }
 
@@ -990,7 +1078,24 @@ impl Stage {
 
 impl Render for Stage {
     fn render(&self) -> Markup {
-        html! {}
+        html! {
+            div role=[self.label.as_ref().map(|_| "img")]
+                aria-label=[self.label.as_deref()]
+                id=[self.id.as_deref()]
+                class=[self.class.as_deref()]
+                data-pixi="stage"
+                data-pixi-size=[self.size.map(Vec2::attr)]
+                data-pixi-background=[self.background]
+                data-pixi-renderer=[self.renderer.map(Renderer::attr)]
+                data-pixi-reduced=[self.animate_reduced_motion.then_some("animate")] {
+                @for object in &self.objects {
+                    (object)
+                }
+                @if let Some(fallback) = &self.fallback {
+                    div data-pixi-fallback { (fallback) }
+                }
+            }
+        }
     }
 }
 
