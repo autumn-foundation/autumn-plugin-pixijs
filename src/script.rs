@@ -16,6 +16,8 @@
 
 use autumn_web::{Markup, html};
 
+use crate::assets::{INIT_JS, PARSE_JS, PIXI_ASSETS, PIXI_CSS, PIXI_JS, UNSAFE_EVAL_JS};
+
 /// Renders the tags that load PixiJS and the plugin runtime.
 ///
 /// Put it in the page `<head>`. Your own `defer` and module scripts can use
@@ -31,7 +33,22 @@ use autumn_web::{Markup, html};
 /// ```
 #[must_use]
 pub fn pixi_script() -> Markup {
-    html! {}
+    html! {
+        @for path in [PIXI_JS, UNSAFE_EVAL_JS] {
+            @if let Some(asset) = PIXI_ASSETS.get(path) {
+                script src=(asset.url()) integrity=(asset.integrity())
+                    crossorigin="anonymous" defer {}
+            }
+        }
+        @if let Some(parse) = PIXI_ASSETS.get(PARSE_JS) {
+            link rel="modulepreload" href=(parse.plain_url())
+                integrity=(parse.integrity()) crossorigin="anonymous";
+        }
+        @if let Some(init) = PIXI_ASSETS.get(INIT_JS) {
+            script type="module" src=(init.url()) integrity=(init.integrity())
+                crossorigin="anonymous" {}
+        }
+    }
 }
 
 /// Renders the `<link>` tag for the plugin stylesheet.
@@ -48,13 +65,12 @@ pub fn pixi_script() -> Markup {
 /// ```
 #[must_use]
 pub fn pixi_stylesheet() -> Markup {
-    html! {}
+    PIXI_ASSETS.stylesheet_tag(PIXI_CSS)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{INIT_JS, PARSE_JS, PIXI_ASSETS, PIXI_CSS, PIXI_JS, UNSAFE_EVAL_JS};
 
     fn asset(path: &str) -> &'static autumn_web::assets::PluginAsset {
         PIXI_ASSETS.get(path).expect("file is bundled")

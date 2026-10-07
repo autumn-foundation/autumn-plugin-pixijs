@@ -8,7 +8,6 @@ use std::borrow::Cow;
 use autumn_web::app::AppBuilder;
 use autumn_web::plugin::Plugin;
 
-#[allow(unused_imports)]
 use crate::assets::PIXI_ASSETS;
 
 /// The plugin name in Autumn diagnostics.
@@ -46,7 +45,7 @@ impl Plugin for PixiPlugin {
     }
 
     fn build(self, app: AppBuilder) -> AppBuilder {
-        app
+        app.plugin_assets(&PIXI_ASSETS)
     }
 }
 

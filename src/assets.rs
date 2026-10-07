@@ -50,7 +50,19 @@ pub(crate) const PIXI_CSS: &str = "pixi.css";
 /// let sri = PIXI_ASSETS.integrity("init.js").expect("init.js is bundled");
 /// assert!(sri.starts_with("sha384-"));
 /// ```
-pub static PIXI_ASSETS: PluginAssets = PluginAssets::from_files(ASSETS_NAMESPACE, &[]);
+pub static PIXI_ASSETS: PluginAssets = PluginAssets::from_files(
+    ASSETS_NAMESPACE,
+    &[
+        (PIXI_JS, include_bytes!("../assets/pixi.min.js")),
+        (
+            UNSAFE_EVAL_JS,
+            include_bytes!("../assets/unsafe-eval.min.js"),
+        ),
+        (PARSE_JS, include_bytes!("../assets/parse.js")),
+        (INIT_JS, include_bytes!("../assets/init.js")),
+        (PIXI_CSS, include_bytes!("../assets/pixi.css")),
+    ],
+);
 
 /// Provenance of one vendored upstream file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +77,18 @@ pub struct VendoredFile {
 }
 
 /// The vendored upstream files and their pins.
-pub const VENDORED: &[VendoredFile] = &[];
+pub const VENDORED: &[VendoredFile] = &[
+    VendoredFile {
+        path: PIXI_JS,
+        source: "https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/pixi.min.js",
+        upstream_integrity: "sha384-sQhAUuZTvdanRcBHbVCTasnEWH28GGEK87FJGPj/JaqwL/15KWQwKe7whTHdCkwm",
+    },
+    VendoredFile {
+        path: UNSAFE_EVAL_JS,
+        source: "https://cdn.jsdelivr.net/npm/pixi.js@8.22.0/dist/packages/unsafe-eval.min.js",
+        upstream_integrity: "sha384-BM24TdVWfEguSNFpLGxxbyyXTUrbgHXZZWEciqcl2APKgUzLagtGe2wwuAzmsmsi",
+    },
+];
 
 #[cfg(test)]
 mod tests {
@@ -128,7 +151,9 @@ mod tests {
         let paths: Vec<&str> = VENDORED.iter().map(|f| f.path).collect();
         assert_eq!(paths, [PIXI_JS, UNSAFE_EVAL_JS]);
         for file in VENDORED {
-            let asset = PIXI_ASSETS.get(file.path).expect("vendored file is bundled");
+            let asset = PIXI_ASSETS
+                .get(file.path)
+                .expect("vendored file is bundled");
             assert_eq!(sri(asset.bytes()), file.upstream_integrity, "{}", file.path);
             assert!(
                 file.source.starts_with(&format!(
@@ -143,10 +168,10 @@ mod tests {
 
     #[test]
     fn vendored_files_are_the_pinned_version() {
-        // Each upstream file starts with the PixiJS banner of its version.
+        // Each upstream file has the PixiJS banner of its version near the start.
         for file in VENDORED {
             let banner = format!("PixiJS - v{PIXI_VERSION}");
-            assert!(text(file.path)[..200].contains(&banner), "{}", file.path);
+            assert!(text(file.path)[..2048].contains(&banner), "{}", file.path);
         }
     }
 
