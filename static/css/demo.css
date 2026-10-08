@@ -1,0 +1,15 @@
+/* PixiJS demo styles. */
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+body { margin: 0; background: #f8fafc; color: #0f172a; }
+@media (prefers-color-scheme: dark) { body { background: #020617; color: #e2e8f0; } }
+main { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
+section { margin-block: 40px; }
+.hero { display: grid; grid-template-columns: 1fr 1.3fr; gap: 24px; align-items: center; }
+.kicker { font-weight: 600; color: #f97316; margin: 0; }
+h1 { font-size: 2.2rem; margin: 8px 0; }
+.hero-stage { border-radius: 16px; }
+[data-pixi="stage"] { border-radius: 12px; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+button { margin-block: 12px; padding: 8px 16px; font: inherit; border-radius: 8px; border: 1px solid #94a3b8; background: transparent; color: inherit; cursor: pointer; }
+.fallback { display: grid; place-items: center; height: 100%; margin: 0; background: #1e293b; color: #e2e8f0; }
+@media (max-width: 720px) { .hero, .pair { grid-template-columns: 1fr; } }
