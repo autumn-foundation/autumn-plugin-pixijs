@@ -7,7 +7,7 @@ HTML attributes. A tap on a canvas object can send an htmx request.
 
 - The crate contains PixiJS **8.22.0** (MIT license). A `sha384` hash locks
   each vendored file.
-- The crate needs `autumn-web` **0.8** and Rust **1.88** or later.
+- The crate needs `autumn-web` **0.9** and Rust **1.88** or later.
 
 ## Quickstart
 
