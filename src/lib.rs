@@ -80,3 +80,8 @@ pub use stage::{
     Align, AnimatedSprite, Color, DEFAULT_STAGE_SIZE, Geometry, MAX_POLYGON_POINTS, MAX_STAGE_SIDE,
     Renderer, Shape, Sprite, Stage, StageObject, Text, TilingSprite, Vec2,
 };
+
+/// Compiles the Rust snippets of the README as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
