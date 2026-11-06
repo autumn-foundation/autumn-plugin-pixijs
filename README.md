@@ -13,13 +13,23 @@ HTML attributes. A tap on a canvas object can send an htmx request.
 
 Add the plugin:
 
-```rust
+```rust,no_run
 use autumn_plugin_pixijs::PixiPlugin;
+use autumn_web::prelude::*;
 
-autumn_web::app()
-    .plugin(PixiPlugin::new())
-    .run()
-    .await;
+#[get("/")]
+async fn index() -> &'static str {
+    "Hello"
+}
+
+#[autumn_web::main]
+async fn main() {
+    autumn_web::app()
+        .plugin(PixiPlugin::new())
+        .routes(routes![index])
+        .run()
+        .await;
+}
 ```
 
 Put the tags in the layout `<head>`. Put them before your own scripts.
@@ -28,12 +38,15 @@ Tap requests need htmx:
 ```rust
 use autumn_plugin_pixijs::{pixi_script, pixi_stylesheet};
 use autumn_web::assets::asset_url;
+use autumn_web::prelude::*;
 
-html! {
-    head {
-        (pixi_stylesheet())
-        (pixi_script())
-        script src=(asset_url("js/htmx.min.js")) defer {}
+fn head() -> Markup {
+    html! {
+        head {
+            (pixi_stylesheet())
+            (pixi_script())
+            script src=(asset_url("js/htmx.min.js")) defer {}
+        }
     }
 }
 ```
@@ -42,13 +55,16 @@ Write a stage:
 
 ```rust
 use autumn_plugin_pixijs::{Color, Shape, Stage, Text};
+use autumn_web::prelude::*;
 
-html! {
-    (Stage::new()
-        .label("An orange star")
-        .background(Color::hex(0x0f172a))
-        .add(Shape::star(5, 120.0, 50.0).fill(Color::hex(0xff7a18)).spin(30.0))
-        .add(Text::new("Hello").fill(Color::WHITE).position([400.0, 60.0])))
+fn star() -> Markup {
+    html! {
+        (Stage::new()
+            .label("An orange star")
+            .background(Color::hex(0x0f172a))
+            .add(Shape::star(5, 120.0, 50.0).fill(Color::hex(0xff7a18)).spin(30.0))
+            .add(Text::new("Hello").fill(Color::WHITE).position([400.0, 60.0])))
+    }
 }
 ```
 
@@ -96,13 +112,20 @@ The last of the two calls sets the verb. `tap_target`, `tap_swap`, and
 `tap_vals` need one of them.
 
 ```rust
-(Stage::new()
-    .id("game")
-    .add(Sprite::new("/static/img/coin.png")
-        .label("Gold coin")
-        .tap_post("/coins/1/collect")
-        .tap_target("#game")
-        .tap_swap("outerHTML")))
+use autumn_plugin_pixijs::{Sprite, Stage};
+use autumn_web::prelude::*;
+
+fn game() -> Markup {
+    html! {
+        (Stage::new()
+            .id("game")
+            .add(Sprite::new("/static/img/coin.png")
+                .label("Gold coin")
+                .tap_post("/coins/1/collect")
+                .tap_target("#game")
+                .tap_swap("outerHTML")))
+    }
+}
 ```
 
 The server can send the next stage. The runtime frees the old stage and
@@ -121,6 +144,7 @@ In the `prod` profile, Autumn turns on CSRF protection. Then each
 token tag to the layout:
 
 ```rust
+use autumn_web::prelude::*;
 use autumn_web::security::CsrfToken;
 
 #[get("/")]
@@ -356,7 +380,11 @@ htmx adds an inline `<style>` for its indicators. Nonce mode blocks this
 style. To remove the style, add this tag to the layout:
 
 ```rust
-meta name="htmx-config" content=r#"{"includeIndicatorStyles":false}"#;
+use autumn_web::prelude::*;
+
+fn htmx_config() -> Markup {
+    html! { meta name="htmx-config" content=r#"{"includeIndicatorStyles":false}"#; }
+}
 ```
 
 ## How it works

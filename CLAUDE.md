@@ -25,6 +25,8 @@ and comments (short sentences, active voice, simple present).
 
 ## Rules
 
+- README Rust snippets are doctests. Make them compile; use `no_run`, not `ignore`.
+  `tests/doc_snippets.rs` checks the TOML snippets and the version pins in the docs.
 - Keep Rust and JS in sync. A new attribute needs: builder method,
   `ATTR` entry in `parse.js`, parser test, E2E test, README row. The test
   `every_emitted_attribute_and_value_is_known_to_the_runtime` checks names.
